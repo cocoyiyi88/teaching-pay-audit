@@ -5,6 +5,8 @@ const LEGACY_SESSION_KEY = 'audit-gaji-firebase-anonymous-session-v2';
 const MAX_MONTHS = 600;
 const MAX_MONTH_WRITES_PER_COMMIT = 400;
 const EPOCH = '1970-01-01T00:00:00.000Z';
+// SuperApp dashboard trigger. Sends only the Firebase ID token; SuperApp re-reads Firestore itself.
+const SUPERAPP_SIGNAL_URL = 'https://charisna-superapp.charisna-superapp.workers.dev/connector/signal';
 
 export class FirebaseRestClient {
   constructor(config) {
@@ -225,6 +227,8 @@ export class FirebaseRestClient {
 
       await this.#commit(writes, { keepalive: Boolean(options.keepalive && isFinalChunk) });
     }
+    // Only reached after every Firestore commit succeeded.
+    this.#notifySuperApp(session, options);
     return revision;
   }
 
@@ -240,6 +244,7 @@ export class FirebaseRestClient {
         updatedAt: revision,
       }),
     ], options);
+    this.#notifySuperApp(session, options);
     return revision;
   }
 
@@ -250,11 +255,30 @@ export class FirebaseRestClient {
     await this.#commit([
       createUpdateWrite(this.#documentName(`${root}/salaryAuditMonths/${month.monthKey}`), month),
     ], options);
+    this.#notifySuperApp(session, options);
   }
 
   async syncAll(database, options = {}) {
     const monthKeys = Object.keys(database?.months || {}).filter(isMonthKey);
     return this.saveChanges(database, monthKeys, options);
+  }
+
+  // Best-effort, fire-and-forget. Never throws and never delays or fails the save; SuperApp Cron is the fallback.
+  // pagehide/keepalive delivery is not guaranteed.
+  #notifySuperApp(session, options = {}) {
+    try {
+      if (typeof fetch !== 'function' || !session?.idToken) return;
+      fetch(SUPERAPP_SIGNAL_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: session.idToken }),
+        keepalive: Boolean(options.keepalive),
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+      }).catch(() => {});
+    } catch {
+      // Signal failure must never affect saving.
+    }
   }
 
   #assertConfigured() {

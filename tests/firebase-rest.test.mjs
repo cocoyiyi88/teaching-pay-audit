@@ -273,3 +273,42 @@ test('change password reauthenticates with the current password and refreshes th
     globalThis.fetch = previousFetch;
   }
 });
+
+test('cloud saves signal SuperApp with only the ID token and survive signal failure', async () => {
+  const previousStorage = globalThis.localStorage;
+  const previousFetch = globalThis.fetch;
+  globalThis.localStorage = new MemoryStorage();
+  const calls = [];
+  let failSignal = false;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), body: options.body || '', keepalive: options.keepalive });
+    if (String(url).includes('accounts:signInWithPassword')) {
+      return jsonResponse(200, { localId: 'user-123', email: 'o@example.com', idToken: 'id-token', refreshToken: 'refresh-token', expiresIn: '3600' });
+    }
+    if (String(url).includes('/connector/signal')) {
+      if (failSignal) throw new Error('offline');
+      return jsonResponse(200, { accepted: true });
+    }
+    if (String(url).includes('documents:commit') && globalThis.__failCommit) return jsonResponse(500, { error: { message: 'x' } });
+    return jsonResponse(200, { name: 'ok' });
+  };
+  try {
+    const client = new FirebaseRestClient({ apiKey: 'k', projectId: 'test-project' });
+    await client.signIn('o@example.com', 'secret12');
+    const db = { version: 2, settings: {}, months: {} };
+    await client.saveChanges(db, []);
+    let signals = calls.filter((call) => call.url.includes('/connector/signal'));
+    assert.equal(signals.length, 1);
+    assert.deepEqual(JSON.parse(signals[0].body), { idToken: 'id-token' });
+    failSignal = true;
+    await client.saveChanges(db, []);
+    globalThis.__failCommit = true;
+    const before = calls.filter((call) => call.url.includes('/connector/signal')).length;
+    await assert.rejects(client.saveChanges(db, []));
+    assert.equal(calls.filter((call) => call.url.includes('/connector/signal')).length, before);
+  } finally {
+    delete globalThis.__failCommit;
+    globalThis.localStorage = previousStorage;
+    globalThis.fetch = previousFetch;
+  }
+});
