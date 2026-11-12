@@ -47,7 +47,7 @@ export function buildMonthXlsxBytes(month, displayName = 'Teacher', chartPngByte
   } else {
     detailRows.push(row(detailStart, [str(`A${detailStart}`, 'No teaching activity recorded for this period.', 11)], 28));
   }
-  detailRows.push(row(totalRow, [str(`A${totalRow}`, 'MONTHLY TOTAL', 9), formula(`D${totalRow}`, `SUM(D${detailStart}:D${detailEnd})`, summary.totalHours, 13), formula(`F${totalRow}`, `SUM(F${detailStart}:F${detailEnd})`, summary.totalPay, 10)], 28));
+  detailRows.push(row(totalRow, [str(`A${totalRow}`, 'MONTHLY TOTAL', 9), str(`B${totalRow}`, '', 9), str(`C${totalRow}`, '', 9), formula(`D${totalRow}`, `SUM(D${detailStart}:D${detailEnd})`, summary.totalHours, 13), str(`E${totalRow}`, '', 9), formula(`F${totalRow}`, `SUM(F${detailStart}:F${detailEnd})`, summary.totalPay, 10), str(`G${totalRow}`, '', 9)], 28));
 
   const analytics = monthAnalytics(month);
   const analyticsRows = [
@@ -83,7 +83,7 @@ export function buildYearXlsxBytes(database, year, displayName = 'Teacher', char
   const dataStart=4, dataEnd=15, totalRow=17;
   const monthlyRows=[row(1,[str('A1',`${BRAND.appName} - ${year}`,1)],32),row(3,['No.','Month','Teaching Days','Total Hours','Average / Day','Hourly Rate','Total Pay'].map((v,i)=>str(`${col(i+1)}3`,v,5)),28)];
   months.forEach((m,index)=>{const r=dataStart+index;monthlyRows.push(row(r,[num(`A${r}`,index+1,6),str(`B${r}`,formatMonthKey(m.monthKey),6),num(`C${r}`,m.summary.activeDays,7),num(`D${r}`,m.summary.totalHours,7),num(`E${r}`,m.summary.averageHours,7),num(`F${r}`,m.month?.hourlyRate??database.settings?.defaultHourlyRate??10,8),num(`G${r}`,m.summary.totalPay,8)]));});
-  monthlyRows.push(row(totalRow,[str(`A${totalRow}`,`TOTAL ${year}`,9),formula(`C${totalRow}`,`SUM(C${dataStart}:C${dataEnd})`,totals.days,9),formula(`D${totalRow}`,`SUM(D${dataStart}:D${dataEnd})`,totals.hours,13),formula(`G${totalRow}`,`SUM(G${dataStart}:G${dataEnd})`,totals.pay,10)],28));
+  monthlyRows.push(row(totalRow,[str(`A${totalRow}`,`TOTAL ${year}`,9),str(`B${totalRow}`,'',9),formula(`C${totalRow}`,`SUM(C${dataStart}:C${dataEnd})`,totals.days,9),formula(`D${totalRow}`,`SUM(D${dataStart}:D${dataEnd})`,totals.hours,13),str(`E${totalRow}`,'',9),str(`F${totalRow}`,'',9),formula(`G${totalRow}`,`SUM(G${dataStart}:G${dataEnd})`,totals.pay,10)],28));
   const analytics=yearAnalytics(database,year);const analyticsRows=[row(1,[str('A1','Annual Analytics',1)],32),row(3,[str('A3','Month',5),str('B3','Teaching Hours',5),str('C3','Earnings',5)],26),...analytics.labels.map((label,index)=>row(4+index,[str(`A${4+index}`,label,6),num(`B${4+index}`,analytics.hours[index],7),num(`C${4+index}`,analytics.pay[index],8)]))];
   return buildWorkbook({title:`${BRAND.appName} - ${year}`,sheets:[sheetDef('Summary',summaryRows,{cols:[22,24,5,22,26,14],merges:['A1:F1','A2:F2']}),sheetDef('Monthly Breakdown',monthlyRows,{cols:[8,24,18,18,18,18,20],merges:['A1:G1', `A${totalRow}:B${totalRow}`],freezeRows:3}),sheetDef('Analytics',analyticsRows,{cols:[18,18,18,3,16,16,16,16,16,16,16,16,16],drawing:chartPngBytes?1:0,freezeRows:3})],chartPngBytes});
 }
@@ -116,13 +116,34 @@ function num(ref,value,style=0){return {ref,type:'n',value:Number(value)||0,styl
 function formula(ref,expression,cached,style=0){return {ref,type:'f',formula:expression,value:Number(cached)||0,style};}
 
 function worksheetXml(sheet, sheetIndex) {
-  const maxCell = sheet.rows.flatMap((r)=>r.cells).map((c)=>c.ref).pop() || 'A1';
+  const dimensionRef = computeSheetDimension(sheet);
   const sheetViews = sheet.freezeRows ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${sheet.freezeRows}" topLeftCell="A${sheet.freezeRows+1}" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft"/></sheetView></sheetViews>` : '<sheetViews><sheetView workbookViewId="0"/></sheetViews>';
   const cols = sheet.cols.length ? `<cols>${sheet.cols.map((width,index)=>`<col min="${index+1}" max="${index+1}" width="${width}" customWidth="1"/>`).join('')}</cols>` : '';
   const rows = sheet.rows.map((r)=>`<row r="${r.index}"${r.height?` ht="${r.height}" customHeight="1"`:''}>${r.cells.map(cellXml).join('')}</row>`).join('');
   const merges = sheet.merges.length ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((ref)=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells>` : '';
   const drawing = sheet.drawing ? '<drawing r:id="rId1"/>' : '';
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dimension ref="A1:${maxCell}"/>${sheetViews}<sheetFormatPr defaultRowHeight="20"/>${cols}<sheetData>${rows}</sheetData>${merges}${drawing}</worksheet>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dimension ref="${dimensionRef}"/>${sheetViews}<sheetFormatPr defaultRowHeight="20"/>${cols}<sheetData>${rows}</sheetData>${merges}${drawing}</worksheet>`;
+}
+
+function computeSheetDimension(sheet) {
+  let maxCol = 1;
+  let maxRow = 1;
+  const parseRef = (ref) => {
+    const match = /^([A-Z]+)(\d+)$/.exec(String(ref || ''));
+    if (!match) return;
+    let colNum = 0;
+    for (const ch of match[1]) colNum = colNum * 26 + (ch.charCodeAt(0) - 64);
+    maxCol = Math.max(maxCol, colNum);
+    maxRow = Math.max(maxRow, Number(match[2]) || 1);
+  };
+  for (const r of sheet.rows) {
+    maxRow = Math.max(maxRow, Number(r.index) || 1);
+    for (const c of r.cells) parseRef(c.ref);
+  }
+  for (const m of sheet.merges || []) {
+    for (const part of String(m).split(':')) parseRef(part);
+  }
+  return `A1:${col(maxCol)}${maxRow}`;
 }
 
 function cellXml(cell) {
@@ -149,7 +170,7 @@ function yearAnalytics(database,year){const months=getMonthKeysForYear(year);ret
 function dataUrlBytes(url){const binary=atob(url.split(',')[1]);const out=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);return out;}
 function lineCount(v){return Math.max(1,String(v||'').split(/\r?\n/).length)}
 function col(n){let s='';while(n){n--;s=String.fromCharCode(65+n%26)+s;n=Math.floor(n/26)}return s}
-function xml(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function xml(v){return String(v??'').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function xmlAttr(v){return xml(v).replace(/"/g,'&quot;')}
 function finite(v){const n=Number(v);return Number.isFinite(n)?n:0}
 function textFile(name,text){return {name,data:new TextEncoder().encode(text)}}

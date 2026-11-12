@@ -93,3 +93,18 @@ test('annual report produces one professional landscape PDF with 12 months and c
   assert.equal(pageCount(pdf), 1);
   assert.doesNotMatch(pdf, /Unique Class|Professional PDF Preview|Save as PDF/i);
 });
+
+test('giant single row spanning more than one page splits cleanly without negative Y coordinates', () => {
+  const month = createMonth('2026-08', 10);
+  month.entries[1] = {
+    day: 1,
+    className: Array.from({ length: 80 }, (_, index) => `Session ${index + 1}`).join('\n'),
+    hours: 4,
+    notes: 'Multi-page entry',
+  };
+
+  const pdf = decodePdf(buildMonthReportPdf(month, 'Ipul', new Date('2026-08-03T06:16:00Z')));
+  const negativeY = pdf.match(/-\d+(\.\d+)?\s+Tm/g) || [];
+  assert.equal(negativeY.length, 0);
+  assert.ok(pageCount(pdf) >= 2);
+});

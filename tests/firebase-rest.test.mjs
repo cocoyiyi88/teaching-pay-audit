@@ -312,3 +312,76 @@ test('cloud saves signal SuperApp with only the ID token and survive signal fail
     globalThis.fetch = previousFetch;
   }
 });
+
+test('restoreSession keeps session when offline or refresh hits transient network failure, and deduplicates concurrent refreshes', async () => {
+  const previousStorage = globalThis.localStorage;
+  const previousFetch = globalThis.fetch;
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  globalThis.localStorage = new MemoryStorage();
+  let refreshCalls = 0;
+
+  globalThis.localStorage.setItem('audit-gaji-firebase-user-session-v3', JSON.stringify({
+    uid: 'offline-user',
+    email: 'offline@example.com',
+    idToken: 'expired-token',
+    refreshToken: 'valid-refresh',
+    expiresAt: Date.now() - 60_000,
+  }));
+
+  try {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: false } });
+    const client = new FirebaseRestClient({ apiKey: 'k', projectId: 'test-project' });
+    const offlineSession = await client.restoreSession();
+    assert.equal(offlineSession?.uid, 'offline-user');
+    assert.equal(client.authenticated, true);
+
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: true } });
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('securetoken.googleapis.com')) {
+        refreshCalls += 1;
+        throw new Error('network down');
+      }
+      return jsonResponse(500, {});
+    };
+    const transientSession = await client.restoreSession();
+    assert.equal(transientSession?.uid, 'offline-user');
+    assert.equal(client.authenticated, true);
+
+    refreshCalls = 0;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('securetoken.googleapis.com')) {
+        refreshCalls += 1;
+        await new Promise((r) => setTimeout(r, 10));
+        return jsonResponse(200, {
+          user_id: 'offline-user',
+          id_token: 'fresh-token',
+          refresh_token: 'fresh-refresh',
+          expires_in: '3600',
+        });
+      }
+      if (String(url).includes('/salaryAudit/database')) {
+        return jsonResponse(404, { error: { status: 'NOT_FOUND' } });
+      }
+      return jsonResponse(200, {});
+    };
+    await Promise.all([client.fetchRevision(), client.fetchRevision(), client.fetchRevision()]);
+    assert.equal(refreshCalls, 1);
+
+    globalThis.localStorage.setItem('audit-gaji-firebase-user-session-v3', JSON.stringify({
+      uid: 'offline-user',
+      email: 'offline@example.com',
+      idToken: 'expired-token',
+      refreshToken: 'revoked-refresh',
+      expiresAt: Date.now() - 60_000,
+    }));
+    globalThis.fetch = async () => jsonResponse(400, { error: { message: 'INVALID_REFRESH_TOKEN' } });
+    const revoked = await client.restoreSession();
+    assert.equal(revoked, null);
+    assert.equal(client.authenticated, false);
+  } finally {
+    if (previousNavigator) Object.defineProperty(globalThis, 'navigator', previousNavigator);
+    else delete globalThis.navigator;
+    globalThis.localStorage = previousStorage;
+    globalThis.fetch = previousFetch;
+  }
+});

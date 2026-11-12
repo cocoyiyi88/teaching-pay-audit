@@ -40,8 +40,12 @@ async function readIndexedDb(scope) {
     const transaction = database.transaction(STORE_NAME, 'readonly');
     const request = transaction.objectStore(STORE_NAME).get(indexedDbKey(scope));
     request.onsuccess = () => resolve(request.result ? sanitizeDatabase(request.result) : null);
-    request.onerror = () => reject(request.error || new Error('IndexedDB data could not be read.'));
+    request.onerror = () => {
+      database.close();
+      reject(request.error || new Error('IndexedDB data could not be read.'));
+    };
     transaction.oncomplete = () => database.close();
+    transaction.onabort = () => database.close();
   });
 }
 
@@ -55,7 +59,11 @@ async function writeIndexedDb(value, scope) {
       database.close();
       resolve();
     };
-    transaction.onerror = () => reject(transaction.error || new Error('Data could not be saved to IndexedDB.'));
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error || new Error('Data could not be saved to IndexedDB.'));
+    };
+    transaction.onabort = () => database.close();
   });
 }
 
@@ -69,7 +77,11 @@ async function deleteIndexedDb(scope) {
       database.close();
       resolve();
     };
-    transaction.onerror = () => reject(transaction.error || new Error('IndexedDB data could not be cleared.'));
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error || new Error('IndexedDB data could not be cleared.'));
+    };
+    transaction.onabort = () => database.close();
   });
 }
 

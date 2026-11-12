@@ -182,9 +182,13 @@ export class PdfPage {
 
 export function mm(value) { return value * POINTS_PER_MM; }
 
-export function measureText(text, size = 10) {
+export function measureText(text, size = 10, bold = false) {
   const safeText = normalizePdfText(text);
-  const units = [...safeText].reduce((total, character) => total + (STANDARD_FONT_WIDTHS[character] ?? 556), 0);
+  const units = [...safeText].reduce((total, character) => {
+    const base = STANDARD_FONT_WIDTHS[character] ?? 556;
+    const scale = bold && !/[\d .,:-]/.test(character) ? 1.07 : 1;
+    return total + base * scale;
+  }, 0);
   return (units / 1000) * size;
 }
 
@@ -192,37 +196,48 @@ export function wrapText(value, maxWidth, size = 10, bold = false, maxLines = In
   const text = normalizePdfText(value).replace(/\r\n?/g, '\n');
   const paragraphs = text.split('\n');
   const lines = [];
-  for (const paragraph of paragraphs) {
+  for (let pIndex = 0; pIndex < paragraphs.length; pIndex += 1) {
+    const paragraph = paragraphs[pIndex];
+    const hasMoreParagraphs = pIndex < paragraphs.length - 1;
     if (!paragraph) {
       lines.push('');
-      if (lines.length >= maxLines) break;
+      if (lines.length >= maxLines) {
+        return hasMoreParagraphs
+          ? truncateLastLine(lines, maxWidth, size, bold, true)
+          : lines.slice(0, maxLines);
+      }
       continue;
     }
     const words = paragraph.trim().split(/\s+/);
     let line = '';
-    for (const word of words) {
+    for (let wIndex = 0; wIndex < words.length; wIndex += 1) {
+      const word = words[wIndex];
+      const hasMoreAfterWord = hasMoreParagraphs || wIndex < words.length - 1;
       const candidate = line ? `${line} ${word}` : word;
       if (measureText(candidate, size, bold) <= maxWidth) { line = candidate; continue; }
       if (line) {
         lines.push(line);
-        if (lines.length >= maxLines) return truncateLastLine(lines, maxWidth, size, bold);
+        if (lines.length >= maxLines) return truncateLastLine(lines, maxWidth, size, bold, true);
         line = '';
       }
       if (measureText(word, size, bold) <= maxWidth) { line = word; continue; }
       let chunk = '';
-      for (const character of word) {
+      for (let cIndex = 0; cIndex < word.length; cIndex += 1) {
+        const character = word[cIndex];
         const candidateChunk = chunk + character;
         if (measureText(candidateChunk, size, bold) <= maxWidth) chunk = candidateChunk;
         else {
           if (chunk) lines.push(chunk);
-          if (lines.length >= maxLines) return truncateLastLine(lines, maxWidth, size, bold);
+          if (lines.length >= maxLines) return truncateLastLine(lines, maxWidth, size, bold, hasMoreAfterWord || cIndex < word.length);
           chunk = character;
         }
       }
       line = chunk;
     }
     if (line || !lines.length) lines.push(line);
-    if (lines.length >= maxLines) return truncateLastLine(lines.slice(0, maxLines), maxWidth, size, bold);
+    if (lines.length >= maxLines) {
+      return truncateLastLine(lines.slice(0, maxLines), maxWidth, size, bold, hasMoreParagraphs);
+    }
   }
   return lines.length ? lines : [''];
 }
@@ -243,11 +258,21 @@ export function downloadPdf(bytes, filename) {
   window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
-function truncateLastLine(lines, maxWidth, size, bold) {
+function truncateLastLine(lines, maxWidth, size, bold, forceEllipsis = false) {
   if (!lines.length) return [''];
   const result = [...lines];
-  result[result.length - 1] = ellipsize(result[result.length - 1], maxWidth, size, bold);
+  const last = result[result.length - 1];
+  result[result.length - 1] = forceEllipsis
+    ? forceEllipsize(last, maxWidth, size, bold)
+    : ellipsize(last, maxWidth, size, bold);
   return result;
+}
+
+function forceEllipsize(text, maxWidth, size, bold) {
+  const ellipsis = '...';
+  let result = String(text || '').replace(/\s+$/, '');
+  while (result && measureText(`${result}${ellipsis}`, size, bold) > maxWidth) result = result.slice(0, -1);
+  return `${result}${ellipsis}`;
 }
 
 function ellipsize(text, maxWidth, size, bold) {
@@ -265,11 +290,12 @@ function normalizePdfText(value) {
     .replace(/[\u2013\u2014]/g, '-')
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201c\u201d]/g, '"')
-    .replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, '?');
+    .replace(/\t/g, ' ')
+    .replace(/[^\x0A\x0D\x20-\x7E\xA0-\xFF]/g, '?');
 }
 
 function escapePdfString(value) {
-  return normalizePdfText(value).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)').replace(/\r?\n/g, ' ');
+  return normalizePdfText(value).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)').replace(/[\r\n]+/g, ' ');
 }
 
 function rgb(color) {

@@ -104,7 +104,7 @@ export async function buildYearCanvas(database, year, displayName = 'Teacher') {
   const cols = [90, 350, 220, 220, 250, 260, 330];
   drawTableHeader(ctx, ['No.', 'Month', 'Teaching Days', 'Total Hours', 'Average / Day', 'Hourly Rate', 'Total Pay'], cols, margin, y, 54); y += 54;
   months.forEach((item, index) => {
-    drawTableRow(ctx, [String(index + 1), formatMonthKey(item.monthKey), String(item.summary.activeDays), formatHours(item.summary.totalHours), formatHours(item.summary.averageHours), formatCurrency(item.month?.hourlyRate ?? database.settings?.defaultHourlyRate ?? 10), formatCurrency(item.summary.totalPay)], cols, margin, y, 49, index % 2 === 1);
+    drawTableRow(ctx, [String(index + 1), formatMonthKey(item.monthKey), String(item.summary.activeDays), formatHours(item.summary.totalHours), formatHours(item.summary.averageHours), formatCurrency(item.month?.hourlyRate ?? database.settings?.defaultHourlyRate ?? 10), formatCurrency(item.summary.totalPay)], cols, margin, y, 49, index % 2 === 1, { boldCols: [1, 6], mutedCols: [] });
     y += 49;
   });
   drawTotalRow(ctx, ['', `TOTAL ${year}`, String(totals.days), formatHours(totals.hours), '', '', formatCurrency(totals.pay)], cols, margin, y, 60);
@@ -142,9 +142,9 @@ function drawTableHeader(ctx, headers, cols, x, y, h) {
   let cx = x; headers.forEach((header, i) => { drawText(ctx, header, cx + 14, y + 33, { size: 13, weight: 800, color: COLORS.primaryDark, maxWidth: cols[i]-28 }); cx += cols[i]; if (i < cols.length-1) drawVLine(ctx, cx, y, y+h, '#d5dcf4'); });
 }
 
-function drawTableRow(ctx, values, cols, x, y, h, alternate) {
+function drawTableRow(ctx, values, cols, x, y, h, alternate, { boldCols = [1, 5], mutedCols = [6] } = {}) {
   ctx.fillStyle = alternate ? '#fbfcff' : '#fff'; ctx.fillRect(x, y, cols.reduce((a,b)=>a+b,0), h); strokeRect(ctx, x, y, cols.reduce((a,b)=>a+b,0), h, COLORS.line);
-  let cx=x; values.forEach((value,i)=>{ const lines=Array.isArray(value)?value:[String(value ?? '')]; const baseline = y + 24; lines.slice(0, Math.floor((h-16)/24)).forEach((line, li)=>drawText(ctx,line,cx+14,baseline+li*24,{size:15,weight:i===1||i===5?700:500,color:i===6?'#4b5565':COLORS.ink,maxWidth:cols[i]-28})); cx += cols[i]; if(i<cols.length-1) drawVLine(ctx,cx,y,y+h,COLORS.line); });
+  let cx=x; values.forEach((value,i)=>{ const lines=Array.isArray(value)?value:[String(value ?? '')]; const baseline = y + 24; lines.slice(0, Math.floor((h-16)/24)).forEach((line, li)=>drawText(ctx,line,cx+14,baseline+li*24,{size:15,weight:boldCols.includes(i)?700:500,color:mutedCols.includes(i)?'#4b5565':COLORS.ink,maxWidth:cols[i]-28})); cx += cols[i]; if(i<cols.length-1) drawVLine(ctx,cx,y,y+h,COLORS.line); });
 }
 
 function drawTotalRow(ctx, values, cols, x, y, h) {
@@ -194,11 +194,11 @@ function drawFooter(ctx, width, height, rightText) {
 
 function drawTopRule(ctx,width){ctx.fillStyle=COLORS.primary;ctx.fillRect(0,0,width,12)}
 function drawLabel(ctx,text,x,y){drawText(ctx,text,x,y,{size:13,weight:800,color:COLORS.primary})}
-function drawText(ctx,text,x,y,{size=16,weight=500,color=COLORS.ink,align='left',maxWidth}={}){ctx.save();ctx.font=`${weight} ${size}px Inter, Arial, sans-serif`;ctx.fillStyle=color;ctx.textAlign=align;ctx.textBaseline='alphabetic';let t=String(text??'');if(maxWidth){while(t.length>1&&ctx.measureText(t).width>maxWidth)t=t.slice(0,-1);if(t!==String(text??''))t=t.replace(/\s+$/,'')+'...';}ctx.fillText(t,x,y);ctx.restore()}
+function drawText(ctx,text,x,y,{size=16,weight=500,color=COLORS.ink,align='left',maxWidth}={}){ctx.save();ctx.font=`${weight} ${size}px Inter, Arial, sans-serif`;ctx.fillStyle=color;ctx.textAlign=align;ctx.textBaseline='alphabetic';const raw=String(text??'');let t=raw;if(maxWidth&&ctx.measureText(raw).width>maxWidth){const ellipsis='...';while(t.length>0&&ctx.measureText(t.replace(/\s+$/,'')+ellipsis).width>maxWidth)t=t.slice(0,-1);t=t.replace(/\s+$/,'')+ellipsis;}ctx.fillText(t,x,y);ctx.restore()}
 function strokeRect(ctx,x,y,w,h,color){ctx.strokeStyle=color;ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w-1,h-1)}
 function drawVLine(ctx,x,y1,y2,color){ctx.strokeStyle=color;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x+.5,y1);ctx.lineTo(x+.5,y2);ctx.stroke()}
 function roundRect(ctx,x,y,w,h,r){if(ctx.roundRect){ctx.beginPath();ctx.roundRect(x,y,w,h,r);return;}ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
-function wrapCanvasText(text,maxWidth,fontSize){const fake=document.createElement('canvas').getContext('2d');fake.font=`500 ${fontSize}px Inter, Arial, sans-serif`;const out=[];for(const paragraph of String(text??'').replace(/\r\n?/g,'\n').split('\n')){if(!paragraph){out.push('');continue;}let line='';for(const word of paragraph.split(/\s+/)){const candidate=line?`${line} ${word}`:word;if(fake.measureText(candidate).width<=maxWidth){line=candidate;}else{if(line)out.push(line);line=word;}}if(line)out.push(line);}return out.length?out:['-'];}
+function wrapCanvasText(text,maxWidth,fontSize){const fake=document.createElement('canvas').getContext('2d');fake.font=`500 ${fontSize}px Inter, Arial, sans-serif`;const out=[];for(const paragraph of String(text??'').replace(/\r\n?/g,'\n').split('\n')){if(!paragraph){out.push('');continue;}let line='';for(const word of paragraph.trim().split(/\s+/)){const candidate=line?`${line} ${word}`:word;if(fake.measureText(candidate).width<=maxWidth){line=candidate;continue;}if(line){out.push(line);line='';}if(fake.measureText(word).width<=maxWidth){line=word;continue;}let chunk='';for(const ch of word){const next=chunk+ch;if(fake.measureText(next).width<=maxWidth){chunk=next;}else{if(chunk)out.push(chunk);chunk=ch;}}line=chunk;}if(line)out.push(line);}return out.length?out:['-'];}
 function loadImage(src){return new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=reject;image.src=src;});}
 function downloadCanvas(canvas,filename){return new Promise((resolve,reject)=>canvas.toBlob((blob)=>{if(!blob){reject(new Error('PNG export failed.'));return;}const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.rel='noopener';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);resolve();},'image/png',1));}
 function formatGeneratedAt(date){return new Intl.DateTimeFormat('en-US',{day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(date)}

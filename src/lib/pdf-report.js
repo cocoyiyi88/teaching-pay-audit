@@ -176,9 +176,41 @@ function renderMonthReport(document, model, brandMark) {
   } else {
     for (const entry of model.entries) {
       const layout = layoutMonthlyRow(entry);
-      if (y - layout.height < bottomLimit) addPage(true);
-      drawTableRow(page, MONTHLY_COLUMNS, entry, margin, y, layout.height, rowIndex % 2 === 1, layout.lines);
-      y -= layout.height;
+      if (y - layout.height >= bottomLimit) {
+        drawTableRow(page, MONTHLY_COLUMNS, entry, margin, y, layout.height, rowIndex % 2 === 1, layout.lines);
+        y -= layout.height;
+      } else {
+        addPage(true);
+        if (y - layout.height >= bottomLimit) {
+          drawTableRow(page, MONTHLY_COLUMNS, entry, margin, y, layout.height, rowIndex % 2 === 1, layout.lines);
+          y -= layout.height;
+        } else {
+          // Row is taller than an entire page; split its wrapped lines cleanly across pages.
+          const totalLines = Math.max(layout.lines.className.length, layout.lines.notes.length);
+          let cursor = 0;
+          while (cursor < totalLines) {
+            if (y - 32 < bottomLimit) addPage(true);
+            const maxLinesHere = Math.max(1, Math.floor((y - bottomLimit - 12) / layout.lineHeight));
+            const nextCursor = Math.min(totalLines, cursor + maxLinesHere);
+            const isFirstSlice = cursor === 0;
+            const sliceLines = {
+              number: isFirstSlice ? layout.lines.number : [''],
+              date: isFirstSlice ? layout.lines.date : [''],
+              className: layout.lines.className.slice(cursor, nextCursor),
+              hours: isFirstSlice ? layout.lines.hours : [''],
+              rate: isFirstSlice ? layout.lines.rate : [''],
+              amount: isFirstSlice ? layout.lines.amount : [''],
+              notes: layout.lines.notes.slice(cursor, nextCursor),
+            };
+            const sliceCount = Math.max(1, sliceLines.className.length, sliceLines.notes.length);
+            const sliceHeight = Math.max(27, 12 + sliceCount * layout.lineHeight);
+            drawTableRow(page, MONTHLY_COLUMNS, entry, margin, y, sliceHeight, rowIndex % 2 === 1, sliceLines);
+            y -= sliceHeight;
+            cursor = nextCursor;
+            if (cursor < totalLines) addPage(true);
+          }
+        }
+      }
       rowIndex += 1;
     }
   }
@@ -474,7 +506,7 @@ function addPageFooters(pages, { leftText, rightText, margin }) {
 }
 
 function layoutMonthlyRow(row) {
-  const lineHeight = 9.5;
+  const lineHeight = 7.8 * 1.25;
   const available = Object.fromEntries(MONTHLY_COLUMNS.map((column) => [column.key, Math.max(10, column.width - 12)]));
   const lines = {
     number: [row.number],
@@ -486,7 +518,7 @@ function layoutMonthlyRow(row) {
     notes: wrapText(row.notes, available.notes, 7.8, false),
   };
   const lineCount = Math.max(...Object.values(lines).map((item) => item.length));
-  return { lines, height: Math.max(27, 12 + lineCount * lineHeight) };
+  return { lines, lineHeight, height: Math.max(27, 12 + lineCount * lineHeight) };
 }
 
 function drawTableCell(page, lines, x, topY, width, height, { align, bold, color, size, padding }) {

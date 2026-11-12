@@ -74,3 +74,9 @@ test('PDF download uses a real browser download link without a preview popup or 
     URL.revokeObjectURL = originalRevokeObjectUrl;
   }
 });
+
+test('PDF core accounts for bold text width and adds ellipsis when maxLines truncates multi-line input', () => {
+  assert.ok(measureText('MMMMM', 10, true) > measureText('MMMMM', 10, false));
+  const lines = wrapText('Line 1\nLine 2', 200, 10, false, 1);
+  assert.deepEqual(lines, ['Line 1...']);
+});

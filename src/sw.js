@@ -21,13 +21,16 @@ self.addEventListener('fetch', (event) => {
       const response = await fetch(event.request);
       if (response.ok) {
         const cache = await caches.open(CACHE);
-        cache.put(event.request, response.clone());
+        await cache.put(event.request, response.clone());
       }
       return response;
     } catch {
       const cached = await caches.match(event.request);
       if (cached) return cached;
-      if (event.request.mode === 'navigate') return caches.match('/index.html');
+      if (event.request.mode === 'navigate') {
+        const fallback = await caches.match('/index.html');
+        if (fallback) return fallback;
+      }
       throw new Error('This resource is not available offline.');
     }
   })());

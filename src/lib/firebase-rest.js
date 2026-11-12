@@ -8,7 +8,17 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 // SuperApp dashboard trigger. Sends only the Firebase ID token; SuperApp re-reads Firestore itself.
 const SUPERAPP_SIGNAL_URL = 'https://charisna-superapp.charisna-superapp.workers.dev/connector/signal';
 
+const FATAL_REFRESH_ERRORS = new Set([
+  'INVALID_REFRESH_TOKEN',
+  'TOKEN_EXPIRED',
+  'USER_DISABLED',
+  'USER_NOT_FOUND',
+  'USER_TOKEN_EXPIRED',
+]);
+
 export class FirebaseRestClient {
+  #refreshPromise = null;
+
   constructor(config) {
     this.apiKey = String(config?.apiKey || '').trim();
     this.projectId = String(config?.projectId || '').trim();
@@ -43,11 +53,15 @@ export class FirebaseRestClient {
     if (!this.configured) return null;
     const session = this.session;
     if (!session) return null;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return session;
     try {
       return await this.#validSession();
-    } catch {
-      this.signOut();
-      return null;
+    } catch (error) {
+      if (error?.fatal) {
+        this.signOut();
+        return null;
+      }
+      return session;
     }
   }
 
@@ -141,6 +155,7 @@ export class FirebaseRestClient {
   }
 
   signOut() {
+    this.#refreshPromise = null;
     try {
       localStorage.removeItem(SESSION_KEY);
       localStorage.removeItem(LEGACY_SESSION_KEY);
@@ -318,25 +333,42 @@ export class FirebaseRestClient {
     if (!session) throw new Error('Sign in to access your pay records.');
     if (session.expiresAt - Date.now() > 5 * 60 * 1000) return session;
 
-    const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(this.apiKey)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: session.refreshToken }),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      this.signOut();
-      throw new Error(authMessage(data?.error?.message || 'TOKEN_REFRESH_FAILED'));
-    }
+    if (this.#refreshPromise) return this.#refreshPromise;
 
-    const refreshed = {
-      ...session,
-      uid: data.user_id || session.uid,
-      idToken: data.id_token,
-      refreshToken: data.refresh_token || session.refreshToken,
-      expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000,
-    };
-    return this.#storeSession(refreshed);
+    this.#refreshPromise = (async () => {
+      const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(this.apiKey)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: session.refreshToken }),
+      });
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      if (!response.ok) {
+        const rawCode = String(data?.error?.message || 'TOKEN_REFRESH_FAILED').split(' : ')[0];
+        const fatal = response.status === 400 || FATAL_REFRESH_ERRORS.has(rawCode);
+        if (fatal) this.signOut();
+        const err = new Error(authMessage(rawCode));
+        err.fatal = fatal;
+        throw err;
+      }
+
+      const refreshed = {
+        ...session,
+        uid: data.user_id || session.uid,
+        idToken: data.id_token,
+        refreshToken: data.refresh_token || session.refreshToken,
+        expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000,
+      };
+      return this.#storeSession(refreshed);
+    })().finally(() => {
+      this.#refreshPromise = null;
+    });
+
+    return this.#refreshPromise;
   }
 
   #documentName(path) {

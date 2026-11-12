@@ -1,5 +1,5 @@
 import { BRAND } from './brand.js';
-import { calculatePay, formatCurrency, formatHours, summarizeMonth, validateEntry } from './lib/calculations.js';
+import { calculatePay, formatCurrency, formatHours, normalizeHours, summarizeMonth, validateEntry } from './lib/calculations.js';
 import { createDatabase, createMonth, ensureMonth, markMonthEdited, markSettingsEdited, mergeDatabases, sanitizeDatabase } from './lib/database.js';
 import { formatMonthKey, getMonthKeysForYear, getYear, shiftMonth, toMonthKey } from './lib/date.js';
 import { exportBackup, exportMonthCsv, exportYearCsv, readBackup } from './lib/export.js';
@@ -51,6 +51,7 @@ const MIGRATION_KEY_PREFIX = 'audit-gaji-login-migrated-v1:';
 const dirtyMonthKeys = new Set();
 const syncChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('audit-gaji-cloud-sync-v2') : null;
 let settingsDirty = false;
+let changeVersion = 0;
 let localSaveTimer;
 let cloudSaveTimer;
 let cloudFlushPromise = null;
@@ -98,10 +99,18 @@ function registerEvents() {
   window.addEventListener('beforeunload', handleBeforeUnload);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   document.addEventListener('pointerdown', markUserActive, { passive: true });
-  document.addEventListener('keydown', markUserActive, { passive: true });
+  document.addEventListener('keydown', handleGlobalKeydown);
   syncChannel?.addEventListener('message', (event) => {
     if (cloud.authenticated && event.data?.uid === cloud.user?.uid) pullRemoteChanges({ silent: true });
   });
+}
+
+function handleGlobalKeydown(event) {
+  markUserActive();
+  if (event.key === 'Escape' && state.settingsOpen && !state.busy) {
+    state.settingsOpen = false;
+    render();
+  }
 }
 
 async function handleClick(event) {
@@ -112,7 +121,14 @@ async function handleClick(event) {
   }
 
   const button = event.target instanceof Element ? event.target.closest('[data-action]') : null;
-  if (!button || state.busy) return;
+  if (!button) {
+    if (state.mobileMenuOpen && event.target instanceof Element && !event.target.closest('.main-nav')) {
+      state.mobileMenuOpen = false;
+      render();
+    }
+    return;
+  }
+  if (state.busy) return;
   const action = button.dataset.action;
 
   if (action === 'show-login') {
@@ -146,10 +162,11 @@ async function handleClick(event) {
     state.selectedYear += 1;
     render();
   } else if (action === 'open-month') {
-    changeMonth(button.dataset.month);
+    changeMonth(button.dataset.month, { skipRender: true });
     state.view = 'monthly';
     render();
   } else if (action === 'open-settings') {
+    state.mobileMenuOpen = false;
     state.settingsOpen = true;
     render();
   } else if (action === 'close-settings') {
@@ -159,9 +176,17 @@ async function handleClick(event) {
     state.mobileMenuOpen = !state.mobileMenuOpen;
     render();
   } else if (action === 'export-csv') {
-    exportMonthCsv(currentMonth(), currentDisplayName());
+    try {
+      exportMonthCsv(currentMonth(), currentDisplayName());
+    } catch (error) {
+      showToast(errorMessage(error), 'error');
+    }
   } else if (action === 'export-year-csv') {
-    exportYearCsv(state.database, state.selectedYear, currentDisplayName());
+    try {
+      exportYearCsv(state.database, state.selectedYear, currentDisplayName());
+    } catch (error) {
+      showToast(errorMessage(error), 'error');
+    }
   } else if (action === 'export-month-xlsx') {
     try {
       await exportMonthXlsx(currentMonth(), currentDisplayName());
@@ -567,7 +592,7 @@ function handleInput(event) {
     const entry = currentMonth().entries[day];
     if (!entry) return;
     if (input.dataset.field === 'hours') {
-      entry.hours = Math.min(24, Math.max(0, Number(input.value) || 0));
+      entry.hours = normalizeHours(input.value);
       if (Number(input.value) > 24 || Number(input.value) < 0) input.value = entry.hours ? String(entry.hours) : '';
     }
     else entry[input.dataset.field] = input.value;
@@ -628,30 +653,72 @@ async function handleBackupFile() {
   if (!file) return;
   if (!window.confirm('Restore this backup? Data will be merged using the newest version of each month.')) return;
 
+  let imported;
   try {
-    const imported = sanitizeDatabase(await readBackup(file));
-    state.database = ensureMonth(mergeDatabases(state.database, imported), state.monthKey);
-    await saveDatabase(state.database, state.localScope);
-    if (cloud.authenticated) {
-      lastCloudRevision = await cloud.syncAll(state.database);
-      dirtyMonthKeys.clear();
-      settingsDirty = false;
-      syncChannel?.postMessage({ type: 'cloud-updated', revision: lastCloudRevision, uid: cloud.user?.uid || '' });
-    }
-    render();
-    showToast('The backup was restored and merged successfully.', 'success');
+    imported = sanitizeDatabase(await readBackup(file));
   } catch {
     showToast('The backup file is invalid or corrupted.', 'error');
+    return;
+  }
+
+  state.database = ensureMonth(mergeDatabases(state.database, imported), state.monthKey);
+  syncDisplayNameFromDatabase();
+  for (const monthKey of Object.keys(imported.months || {})) {
+    if (!imported.months[monthKey]?.isPristine) dirtyMonthKeys.add(monthKey);
+  }
+  if (!imported.settings?.isPristine) settingsDirty = true;
+  changeVersion += 1;
+
+  try {
+    await saveDatabase(state.database, state.localScope);
+  } catch {
+    showToast('Backup could not be saved on this device.', 'error');
+    return;
+  }
+
+  if (!cloud.authenticated) {
+    render();
+    showToast('The backup was restored and merged successfully.', 'success');
+    return;
+  }
+
+  if (!navigator.onLine) {
+    state.cloudStatus = 'error';
+    state.cloudError = 'This device is offline. Restored data will upload when an internet connection returns.';
+    render();
+    showToast('The backup was restored on this device and will sync when online.', 'success');
+    return;
+  }
+
+  try {
+    const syncStartVersion = changeVersion;
+    lastCloudRevision = await cloud.syncAll(state.database);
+    if (changeVersion === syncStartVersion) {
+      dirtyMonthKeys.clear();
+      settingsDirty = false;
+    } else {
+      scheduleCloudFlush(0);
+    }
+    state.cloudStatus = 'synced';
+    state.cloudError = '';
+    syncChannel?.postMessage({ type: 'cloud-updated', revision: lastCloudRevision, uid: cloud.user?.uid || '' });
+    render();
+    showToast('The backup was restored and merged successfully.', 'success');
+  } catch (error) {
+    state.cloudStatus = 'error';
+    state.cloudError = errorMessage(error);
+    render();
+    showToast(`Backup restored locally, but cloud sync failed: ${state.cloudError}`, 'error');
   }
 }
 
-function changeMonth(monthKey) {
+function changeMonth(monthKey, { skipRender = false } = {}) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) return;
   state.monthKey = monthKey;
   state.selectedYear = getYear(monthKey);
   state.database = ensureMonth(state.database, monthKey);
   markChanged();
-  render();
+  if (!skipRender) render();
 }
 
 function clearCurrentMonth() {
@@ -670,14 +737,20 @@ async function connectAndSync({ silent = false } = {}) {
   state.cloudError = '';
   updateCloudUi();
   try {
+    if (cloudFlushPromise) await cloudFlushPromise;
     await cloud.connect();
     const remote = await cloud.fetchSnapshot();
+    const syncStartVersion = changeVersion;
     state.database = ensureMonth(mergeDatabases(state.database, remote.database), state.monthKey);
     syncDisplayNameFromDatabase();
     await saveDatabase(state.database, state.localScope);
     lastCloudRevision = await cloud.syncAll(state.database);
-    dirtyMonthKeys.clear();
-    settingsDirty = false;
+    if (changeVersion === syncStartVersion) {
+      dirtyMonthKeys.clear();
+      settingsDirty = false;
+    } else {
+      scheduleCloudFlush(0);
+    }
     state.cloudStatus = 'synced';
     state.cloudError = '';
     await completeLoginMigration();
@@ -702,12 +775,17 @@ async function syncNow() {
     await flushCloudChanges({ immediate: true });
     await cloud.connect();
     const remote = await cloud.fetchSnapshot();
+    const syncStartVersion = changeVersion;
     state.database = ensureMonth(mergeDatabases(state.database, remote.database), state.monthKey);
     syncDisplayNameFromDatabase();
     await saveDatabase(state.database, state.localScope);
     lastCloudRevision = await cloud.syncAll(state.database);
-    dirtyMonthKeys.clear();
-    settingsDirty = false;
+    if (changeVersion === syncStartVersion) {
+      dirtyMonthKeys.clear();
+      settingsDirty = false;
+    } else {
+      scheduleCloudFlush(0);
+    }
     state.cloudStatus = 'synced';
     state.cloudError = '';
     await completeLoginMigration();
@@ -731,6 +809,7 @@ function markChanged({ monthKey = '', settings = false } = {}) {
   if (monthKey) dirtyMonthKeys.add(monthKey);
   if (settings) settingsDirty = true;
   if (!monthKey && !settings) return;
+  changeVersion += 1;
 
   markUserActive();
   if (!cloud.configured || !cloud.authenticated) return;
@@ -909,7 +988,7 @@ function reconcileProfileMirror() {
 
   settings.teacherName = currentDisplayName();
   settings.profileNameUpdatedAt = profileUpdatedAt;
-  settings.isPristine = false;
+  if (settings.isPristine) return;
   if (!validIsoTimestamp(settings.updatedAt) || Date.parse(profileUpdatedAt) > Date.parse(settings.updatedAt)) {
     settings.updatedAt = profileUpdatedAt;
   }
@@ -1019,7 +1098,7 @@ function renderAuthScreen() {
         <form class="auth-form" data-auth-form="${isReset ? 'reset' : isRegister ? 'register' : 'login'}">
           ${isRegister ? `<label>Your Name<input name="displayName" type="text" autocomplete="name" required minlength="2" maxlength="80" value="${escapeAttribute(state.authDisplayName)}" placeholder="Example: Ipul"></label><div class="field-help">Used to personalize your dashboard, PDF reports, exports, and profile.</div>` : ''}
           <label>Email<input name="email" type="email" inputmode="email" autocomplete="email" required maxlength="254" value="${escapeAttribute(state.authEmail)}" placeholder="name@example.com"></label>
-          ${isReset ? '' : `<label>Password<div class="password-field"><input name="password" type="${passwordType}" autocomplete="${isRegister ? 'new-password' : 'current-password'}" required minlength="8" maxlength="4096" placeholder="At least 8 characters"><button type="button" data-action="toggle-password" aria-label="${state.passwordVisible ? 'Hide' : 'Show'} password">${icon(state.passwordVisible ? 'eye-off' : 'eye', 18)}</button></div></label>`}
+          ${isReset ? '' : `<label>Password<div class="password-field"><input name="password" type="${passwordType}" autocomplete="${isRegister ? 'new-password' : 'current-password'}" required minlength="${isRegister ? 8 : 6}" maxlength="4096" placeholder="${isRegister ? 'At least 8 characters' : 'Enter your password'}"><button type="button" data-action="toggle-password" aria-label="${state.passwordVisible ? 'Hide' : 'Show'} password">${icon(state.passwordVisible ? 'eye-off' : 'eye', 18)}</button></div></label>`}
           ${isRegister ? `<label>Confirm Password<input name="confirmPassword" type="${passwordType}" autocomplete="new-password" required minlength="8" maxlength="4096" placeholder="Re-enter your password"></label>` : ''}
           <button class="button primary auth-submit" type="submit" ${state.busy ? 'disabled' : ''}>${state.busy ? '<span class="spinner"></span> Processing...' : `${icon(isReset ? 'mail' : isRegister ? 'user-plus' : 'login', 18)} ${submitLabel}`}</button>
         </form>
