@@ -109,7 +109,7 @@ test('giant single row spanning more than one page splits cleanly without negati
   assert.ok(pageCount(pdf) >= 2);
 });
 
-test('full 31-day month with overtime breakdown and signatures auto-fits cleanly on one A4 Portrait page', () => {
+test('full 31-day month with overtime breakdown and signatures fits cleanly on 2 full A4 Portrait pages without an orphan page 3', () => {
   const month = createMonth('2026-10', 10, {
     overtimeEnabled: true,
     overtimeThresholdHours: 100,
@@ -129,8 +129,8 @@ test('full 31-day month with overtime breakdown and signatures auto-fits cleanly
   const pdf = decodePdf(buildMonthReportPdf(month, 'Teacher Name', new Date('2026-11-18T16:50:00Z')));
   const negativeY = pdf.match(/-\d+(\.\d+)?\s+Tm/g) || [];
   assert.equal(negativeY.length, 0);
-  assert.equal(pageCount(pdf), 1);
-  assert.match(pdf, /Page 1 of 1/);
+  assert.equal(pageCount(pdf), 2);
+  assert.match(pdf, /Page 2 of 2/);
   assert.match(pdf, /BASE SUBTOTAL/);
   assert.match(pdf, /OVERTIME ADJUSTMENT/);
   assert.match(pdf, /MONTHLY TOTAL/);

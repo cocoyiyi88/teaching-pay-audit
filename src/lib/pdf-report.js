@@ -138,82 +138,26 @@ export function createYearReportModel(database, year, teacherName = 'Teacher', g
   };
 }
 
-const MONTHLY_LAYOUT_MODES = Object.freeze([
-  {
-    name: 'full',
-    margin: 42,
-    bottomLimit: 38,
-    compactHeader: false,
-    singleRowMeta: false,
-    tableHeaderHeight: 24,
-    headerFontSize: 7,
-    minRowFontSize: 7.4,
-    maxRowFontSize: 7.8,
-    lineScale: 1.24,
-    minRowPad: 6,
-    maxRowPad: 12,
-    cellPadding: 6,
-    minRowHeight: 20,
-    maxMinRowHeight: 27,
-    breakdownHeight: 24,
-    breakdownFontSize: 7.4,
-    totalHeight: 30,
-    totalFontSize: 8.2,
-    sigGap: 24,
-    sigHeight: 74,
-    sigLineDrop: 46,
-  },
-  {
-    name: 'balanced',
-    margin: 36,
-    bottomLimit: 32,
-    compactHeader: false,
-    singleRowMeta: true,
-    tableHeaderHeight: 21,
-    headerFontSize: 6.8,
-    minRowFontSize: 6.9,
-    maxRowFontSize: 7.5,
-    lineScale: 1.2,
-    minRowPad: 4.5,
-    maxRowPad: 11,
-    cellPadding: 5.5,
-    minRowHeight: 15.5,
-    maxMinRowHeight: 24,
-    breakdownHeight: 20,
-    breakdownFontSize: 7.1,
-    totalHeight: 25,
-    totalFontSize: 7.9,
-    sigGap: 18,
-    sigHeight: 64,
-    sigLineDrop: 38,
-  },
-  {
-    name: 'dense',
-    margin: 30,
-    bottomLimit: 26,
-    compactHeader: true,
-    singleRowMeta: true,
-    tableHeaderHeight: 18,
-    headerFontSize: 6.5,
-    minRowFontSize: 6.4,
-    maxRowFontSize: 7.0,
-    lineScale: 1.16,
-    minRowPad: 3,
-    maxRowPad: 9,
-    cellPadding: 4.5,
-    minRowHeight: 13.5,
-    maxMinRowHeight: 21,
-    breakdownHeight: 17,
-    breakdownFontSize: 6.8,
-    totalHeight: 22,
-    totalFontSize: 7.6,
-    sigGap: 14,
-    sigHeight: 56,
-    sigLineDrop: 32,
-  },
-]);
+const MONTHLY_STYLE = Object.freeze({
+  margin: 42,
+  bottomLimit: 44,
+  tableHeaderHeight: 24,
+  headerFontSize: 7,
+  rowFontSize: 7.8,
+  lineScale: 1.25,
+  rowPad: 8,
+  cellPadding: 6,
+  minRowHeight: 22,
+  breakdownHeight: 24,
+  breakdownFontSize: 7.4,
+  totalHeight: 29,
+  totalFontSize: 8.2,
+  sigGap: 20,
+  sigHeight: 74,
+  sigLineDrop: 46,
+});
 
-function getMonthlyColumns(entries, usableWidth) {
+function getMonthlyColumns(entries, usableWidth = 511) {
   const shortNotes = entries.every((entry) => !String(entry.notes || '').includes('\n') && String(entry.notes || '').length <= 24);
   const base = shortNotes
     ? [
@@ -244,94 +188,90 @@ function getMonthlyColumns(entries, usableWidth) {
   });
 }
 
-function estimateFirstPageTableStart(density) {
-  const headerBottom = density.compactHeader ? PDF_PAGE.A4_PORTRAIT.height - 62 : PDF_PAGE.A4_PORTRAIT.height - 102;
-  const introHeight = density.singleRowMeta ? 104 : 166;
-  return headerBottom - introHeight - density.tableHeaderHeight;
-}
-
-function buildDensity(mode, overrides = {}) {
-  return {
-    name: mode.name,
-    margin: mode.margin,
-    bottomLimit: mode.bottomLimit,
-    compactHeader: mode.compactHeader,
-    singleRowMeta: mode.singleRowMeta,
-    tableHeaderHeight: mode.tableHeaderHeight,
-    headerFontSize: mode.headerFontSize,
-    rowFontSize: overrides.rowFontSize ?? mode.maxRowFontSize,
-    lineScale: mode.lineScale,
-    rowPad: overrides.rowPad ?? mode.maxRowPad,
-    cellPadding: mode.cellPadding,
-    minRowHeight: overrides.minRowHeight ?? mode.maxMinRowHeight,
-    breakdownHeight: mode.breakdownHeight,
-    breakdownFontSize: mode.breakdownFontSize,
-    totalHeight: mode.totalHeight,
-    totalFontSize: mode.totalFontSize,
-    sigGap: mode.sigGap,
-    sigHeight: mode.sigHeight,
-    sigLineDrop: mode.sigLineDrop,
-  };
-}
-
-function chooseMonthlyPlan(model) {
+function simulatePagination(model, columns, style) {
+  const layouts = model.entries.map((entry) => layoutMonthlyRow(entry, columns, style));
+  const firstPageStart = PDF_PAGE.A4_PORTRAIT.height - 102 - 166 - style.tableHeaderHeight;
+  const contPageStart = PDF_PAGE.A4_PORTRAIT.height - 102 - 21 - style.tableHeaderHeight;
   const hasOvertime = model.summary.overtimeHours > 0;
-  for (const mode of MONTHLY_LAYOUT_MODES) {
-    const usableWidth = PDF_PAGE.A4_PORTRAIT.width - mode.margin * 2;
-    const columns = getMonthlyColumns(model.entries, usableWidth);
-    const breakdownHeight = hasOvertime ? mode.breakdownHeight * 2 : 0;
-    const footerBlock = breakdownHeight + mode.totalHeight + mode.sigGap + mode.sigHeight;
-    const availableBody = estimateFirstPageTableStart(mode) - mode.bottomLimit - footerBlock;
+  const footerHeight = (hasOvertime ? style.breakdownHeight * 2 : 0) + style.totalHeight + style.sigGap + style.sigHeight;
 
-    // Try largest readable font first, down to minRowFontSize, then expand row padding to fill the A4 page cleanly.
-    const fontSteps = [];
-    for (let size = mode.maxRowFontSize; size >= mode.minRowFontSize - 0.01; size = Math.round((size - 0.2) * 10) / 10) {
-      fontSteps.push(Math.max(mode.minRowFontSize, size));
-    }
+  let pageIndex = 1;
+  let y = firstPageStart;
+  let rowsOnLastPage = 0;
 
-    for (const rowFontSize of fontSteps) {
-      const tightDensity = buildDensity(mode, {
-        rowFontSize,
-        rowPad: mode.minRowPad,
-        minRowHeight: mode.minRowHeight,
-      });
-      const tightLayouts = model.entries.map((entry) => layoutMonthlyRow(entry, columns, tightDensity));
-      const minRowsHeight = tightLayouts.length ? tightLayouts.reduce((sum, item) => sum + item.height, 0) : 42;
-      if (minRowsHeight > availableBody) continue;
-
-      if (!model.entries.length) {
-        return { density: buildDensity(mode, { rowFontSize }), columns, layouts: [] };
+  if (!layouts.length) {
+    y -= 42;
+  } else {
+    for (const layout of layouts) {
+      if (y - layout.height >= style.bottomLimit) {
+        y -= layout.height;
+        rowsOnLastPage += 1;
+      } else {
+        pageIndex += 1;
+        y = contPageStart;
+        rowsOnLastPage = 0;
+        if (y - layout.height >= style.bottomLimit) {
+          y -= layout.height;
+          rowsOnLastPage += 1;
+        } else {
+          // Tall row splits across pages.
+          const totalLines = Math.max(layout.lines.className.length, layout.lines.notes.length);
+          let cursor = 0;
+          while (cursor < totalLines) {
+            if (y - 32 < style.bottomLimit) {
+              pageIndex += 1;
+              y = contPageStart;
+            }
+            const maxLinesHere = Math.max(1, Math.floor((y - style.bottomLimit - style.rowPad) / layout.lineHeight));
+            const nextCursor = Math.min(totalLines, cursor + maxLinesHere);
+            const sliceHeight = Math.max(style.minRowHeight, style.rowPad + (nextCursor - cursor) * layout.lineHeight);
+            y -= sliceHeight;
+            cursor = nextCursor;
+            rowsOnLastPage = 1;
+            if (cursor < totalLines) {
+              pageIndex += 1;
+              y = contPageStart;
+            }
+          }
+        }
       }
-
-      // Distribute available vertical space smoothly across rows so the page looks full & balanced (never cramped or half-empty).
-      const extraTotal = Math.max(0, availableBody - minRowsHeight);
-      const maxExpandPerRow = Math.max(0, mode.maxRowPad - mode.minRowPad);
-      const extraPerRow = Math.min(maxExpandPerRow, extraTotal / model.entries.length);
-      const fittedDensity = buildDensity(mode, {
-        rowFontSize,
-        rowPad: mode.minRowPad + extraPerRow,
-        minRowHeight: Math.min(mode.maxMinRowHeight, mode.minRowHeight + extraPerRow),
-      });
-      const layouts = model.entries.map((entry) => layoutMonthlyRow(entry, columns, fittedDensity));
-      const finalHeight = layouts.reduce((sum, item) => sum + item.height, 0);
-      if (finalHeight <= availableBody + 0.5) {
-        return { density: fittedDensity, columns, layouts };
-      }
-      return { density: tightDensity, columns, layouts: tightLayouts };
     }
   }
 
-  const fallback = buildDensity(MONTHLY_LAYOUT_MODES[0]);
-  const columns = getMonthlyColumns(model.entries, PDF_PAGE.A4_PORTRAIT.width - fallback.margin * 2);
-  return {
-    density: fallback,
-    columns,
-    layouts: model.entries.map((entry) => layoutMonthlyRow(entry, columns, fallback)),
-  };
+  let orphanFooter = false;
+  if (y - footerHeight < style.bottomLimit) {
+    pageIndex += 1;
+    orphanFooter = true;
+  }
+  return { pages: pageIndex, orphanFooter, layouts, rowsOnLastPage };
+}
+
+function chooseMonthlyStyle(model, columns) {
+  const baseSim = simulatePagination(model, columns, MONTHLY_STYLE);
+  if (!baseSim.orphanFooter) return { style: MONTHLY_STYLE, layouts: baseSim.layouts, breakBeforeIndex: -1 };
+
+  // Avoid an orphan page containing ONLY the total/signature block:
+  // First try a gentle, still full-size tightening (keeps full header, 2x2 meta cards, and readable >=7.4pt font).
+  const targetPages = baseSim.pages - 1;
+  const gentleVariants = [
+    { ...MONTHLY_STYLE, minRowHeight: 20, rowPad: 6, rowFontSize: 7.6, bottomLimit: 36, sigGap: 18 },
+    { ...MONTHLY_STYLE, minRowHeight: 18.5, rowPad: 5, rowFontSize: 7.4, bottomLimit: 34, sigGap: 16, sigLineDrop: 40, sigHeight: 68 },
+  ];
+  for (const candidate of gentleVariants) {
+    const sim = simulatePagination(model, columns, candidate);
+    if (!sim.orphanFooter && sim.pages <= targetPages) {
+      return { style: candidate, layouts: sim.layouts, breakBeforeIndex: -1 };
+    }
+  }
+
+  // If still needing the extra page, move the last 2 entries with the total so the final page is balanced, not an orphan footer.
+  const breakBeforeIndex = model.entries.length >= 4 ? model.entries.length - 2 : -1;
+  return { style: MONTHLY_STYLE, layouts: baseSim.layouts, breakBeforeIndex };
 }
 
 function renderMonthReport(document, model, brandMark) {
-  const { density, columns, layouts } = chooseMonthlyPlan(model);
+  const columns = getMonthlyColumns(model.entries, PDF_PAGE.A4_PORTRAIT.width - MONTHLY_STYLE.margin * 2);
+  const { style: density, layouts, breakBeforeIndex } = chooseMonthlyStyle(model, columns);
   const margin = density.margin;
   const bottomLimit = density.bottomLimit;
   const pages = [];
@@ -348,11 +288,10 @@ function renderMonthReport(document, model, brandMark) {
       periodLabel: model.periodLabel,
       continuation,
       brandMark,
-      compact: density.compactHeader,
     });
 
     if (!continuation) {
-      y = drawMonthlyIntroduction(page, model, margin, y, density);
+      y = drawMonthlyIntroduction(page, model, margin, y);
     } else {
       page.text('DAILY HOURS AND EARNINGS - CONTINUED', margin, y - 5, { size: 8, bold: true, color: COLORS.primaryDark });
       y -= 21;
@@ -368,6 +307,7 @@ function renderMonthReport(document, model, brandMark) {
     y -= rowHeight;
   } else {
     for (let index = 0; index < model.entries.length; index += 1) {
+      if (index === breakBeforeIndex) addPage(true);
       const entry = model.entries[index];
       const layout = layouts[index];
       if (y - layout.height >= bottomLimit) {
@@ -530,8 +470,7 @@ function drawReportHeader(page, { margin, reportType, periodLabel, continuation,
   return dividerY - (compact ? 10 : 20);
 }
 
-function drawMonthlyIntroduction(page, model, margin, y, density = buildDensity(MONTHLY_LAYOUT_MODES[0])) {
-  const compact = density.singleRowMeta;
+function drawMonthlyIntroduction(page, model, margin, y) {
   const rateText = model.summary.overtimeEnabled
     ? `${formatCurrency(model.hourlyRate)}/hr (>${formatHours(model.summary.overtimeThresholdHours)}h: ${formatCurrency(model.summary.overtimeHourlyRate)})`
     : `${formatCurrency(model.hourlyRate)} / hour`;
@@ -541,27 +480,6 @@ function drawMonthlyIntroduction(page, model, margin, y, density = buildDensity(
     ['Hourly Rate', rateText],
     ['Generated On', model.generatedLabel],
   ];
-
-  if (compact) {
-    page.text('MONTHLY PAY RECORD', margin, y, { size: 6.4, bold: true, color: COLORS.primary });
-    page.text('Daily Teaching Hours and Earnings', margin, y - 14, { size: 13.5, bold: true, color: COLORS.ink, maxWidth: page.width - margin * 2 });
-    page.text('Teaching activity and calculated earnings for the selected reporting period.', margin, y - 24, { size: 6.8, color: COLORS.muted, maxWidth: page.width - margin * 2 });
-
-    const cardsTop = y - 32;
-    drawMetaCards(page, metaItems, margin, cardsTop, page.width - margin * 2, {
-      gap: 6,
-      cardHeight: 33,
-      labelY: 22.5,
-      valueY: 12,
-      valueSize: 6.9,
-    });
-
-    const sectionY = cardsTop - 44;
-    page.text('TEACHING ACTIVITY DETAILS', margin, sectionY, { size: 6.4, bold: true, color: COLORS.primary });
-    page.text('Daily Hours and Earnings', margin, sectionY - 12, { size: 10.2, bold: true, color: COLORS.ink });
-    page.text(`${model.entries.length} ${model.entries.length === 1 ? 'entry' : 'entries'}`, page.width - margin, sectionY - 11, { size: 6.8, bold: true, color: COLORS.primaryDark, align: 'right' });
-    return sectionY - 19;
-  }
 
   page.text('MONTHLY PAY RECORD', margin, y, { size: 7.2, bold: true, color: COLORS.primary });
   page.text('Daily Teaching Hours and Earnings', margin, y - 21, { size: 18, bold: true, color: COLORS.ink, maxWidth: page.width - margin * 2 });
@@ -650,7 +568,7 @@ function drawTableHeader(page, columns, x, topY, height = 25, fontSize = 7, padd
   return topY - height;
 }
 
-function drawTableRow(page, columns, row, x, topY, height, alternate, preparedLines = null, inactive = false, total = false, density = buildDensity(MONTHLY_LAYOUT_MODES[0])) {
+function drawTableRow(page, columns, row, x, topY, height, alternate, preparedLines = null, inactive = false, total = false, density = MONTHLY_STYLE) {
   const width = totalWidth(columns);
   const bottomY = topY - height;
   const background = total ? COLORS.ink : alternate ? COLORS.alternate : COLORS.white;
@@ -727,22 +645,21 @@ function drawMonthlyTotal(page, columns, model, x, topY, height, fontSize = 8.2,
   });
 }
 
-function drawSignatureSection(page, teacherName, margin, topY, density = buildDensity(MONTHLY_LAYOUT_MODES[0])) {
+function drawSignatureSection(page, teacherName, margin, topY, density = MONTHLY_STYLE) {
   const availableWidth = page.width - margin * 2;
   const gap = 62;
   const boxWidth = (availableWidth - gap) / 2;
   const lineY = topY - density.sigLineDrop;
-  const compact = density.name === 'dense';
 
-  page.text('Prepared by', margin + boxWidth / 2, topY, { size: compact ? 7.2 : 8, color: COLORS.muted, align: 'center' });
+  page.text('Prepared by', margin + boxWidth / 2, topY, { size: 8, color: COLORS.muted, align: 'center' });
   page.line(margin + 12, lineY, margin + boxWidth - 12, lineY, { color: [0.55, 0.59, 0.66], lineWidth: 0.7 });
-  page.text(teacherName || 'Teacher', margin + boxWidth / 2, lineY - (compact ? 11 : 14), { size: compact ? 8.2 : 9, bold: true, color: COLORS.ink, align: 'center', maxWidth: boxWidth - 24 });
-  page.text('Teacher', margin + boxWidth / 2, lineY - (compact ? 20 : 26), { size: compact ? 6.8 : 7.5, color: COLORS.muted, align: 'center' });
+  page.text(teacherName || 'Teacher', margin + boxWidth / 2, lineY - 14, { size: 9, bold: true, color: COLORS.ink, align: 'center', maxWidth: boxWidth - 24 });
+  page.text('Teacher', margin + boxWidth / 2, lineY - 26, { size: 7.5, color: COLORS.muted, align: 'center' });
 
   const secondX = margin + boxWidth + gap;
-  page.text('Reviewed by', secondX + boxWidth / 2, topY, { size: compact ? 7.2 : 8, color: COLORS.muted, align: 'center' });
+  page.text('Reviewed by', secondX + boxWidth / 2, topY, { size: 8, color: COLORS.muted, align: 'center' });
   page.line(secondX + 12, lineY, secondX + boxWidth - 12, lineY, { color: [0.55, 0.59, 0.66], lineWidth: 0.7 });
-  page.text('Reviewer', secondX + boxWidth / 2, lineY - (compact ? 11 : 14), { size: compact ? 8.2 : 9, bold: true, color: COLORS.ink, align: 'center' });
+  page.text('Reviewer', secondX + boxWidth / 2, lineY - 14, { size: 9, bold: true, color: COLORS.ink, align: 'center' });
 }
 
 function drawAnnualInsights(page, model, margin, topY) {
@@ -784,7 +701,7 @@ function addPageFooters(pages, { leftText, rightText, margin }) {
   });
 }
 
-function layoutMonthlyRow(row, columns = MONTHLY_COLUMNS, density = buildDensity(MONTHLY_LAYOUT_MODES[0])) {
+function layoutMonthlyRow(row, columns = MONTHLY_COLUMNS, density = MONTHLY_STYLE) {
   const fontSize = density.rowFontSize;
   const lineHeight = fontSize * density.lineScale;
   const padX = density.cellPadding * 2;
