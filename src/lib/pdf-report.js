@@ -138,10 +138,136 @@ export function createYearReportModel(database, year, teacherName = 'Teacher', g
   };
 }
 
+const MONTHLY_DENSITIES = Object.freeze([
+  {
+    name: 'normal',
+    margin: 42,
+    bottomLimit: 48,
+    compactHeader: false,
+    singleRowMeta: false,
+    tableHeaderHeight: 25,
+    headerFontSize: 7,
+    rowFontSize: 7.8,
+    lineScale: 1.25,
+    rowPad: 12,
+    cellPadding: 6,
+    minRowHeight: 27,
+    breakdownHeight: 25,
+    breakdownFontSize: 7.4,
+    totalHeight: 31,
+    totalFontSize: 8.2,
+    sigGap: 29,
+    sigHeight: 76,
+    sigLineDrop: 49,
+  },
+  {
+    name: 'cozy',
+    margin: 34,
+    bottomLimit: 32,
+    compactHeader: true,
+    singleRowMeta: true,
+    tableHeaderHeight: 19,
+    headerFontSize: 6.6,
+    rowFontSize: 7.1,
+    lineScale: 1.2,
+    rowPad: 6,
+    cellPadding: 5,
+    minRowHeight: 18,
+    breakdownHeight: 19,
+    breakdownFontSize: 7,
+    totalHeight: 23,
+    totalFontSize: 7.8,
+    sigGap: 16,
+    sigHeight: 60,
+    sigLineDrop: 36,
+  },
+  {
+    name: 'compact',
+    margin: 30,
+    bottomLimit: 26,
+    compactHeader: true,
+    singleRowMeta: true,
+    tableHeaderHeight: 16,
+    headerFontSize: 6.3,
+    rowFontSize: 6.6,
+    lineScale: 1.15,
+    rowPad: 3.5,
+    cellPadding: 4.5,
+    minRowHeight: 14,
+    breakdownHeight: 16,
+    breakdownFontSize: 6.6,
+    totalHeight: 20,
+    totalFontSize: 7.4,
+    sigGap: 12,
+    sigHeight: 52,
+    sigLineDrop: 30,
+  },
+]);
+
+function getMonthlyColumns(entries, usableWidth) {
+  const shortNotes = entries.every((entry) => !String(entry.notes || '').includes('\n') && String(entry.notes || '').length <= 24);
+  const base = shortNotes
+    ? [
+      { key: 'number', label: 'No.', width: 24, align: 'center' },
+      { key: 'date', label: 'Date', width: 28, align: 'center' },
+      { key: 'className', label: 'Class', width: 200, align: 'left' },
+      { key: 'hours', label: 'Hours', width: 38, align: 'right' },
+      { key: 'rate', label: 'Rate', width: 50, align: 'right' },
+      { key: 'amount', label: 'Amount', width: 58, align: 'right' },
+      { key: 'notes', label: 'Notes', width: 113, align: 'left' },
+    ]
+    : [
+      { key: 'number', label: 'No.', width: 26, align: 'center' },
+      { key: 'date', label: 'Date', width: 30, align: 'center' },
+      { key: 'className', label: 'Class', width: 150, align: 'left' },
+      { key: 'hours', label: 'Hours', width: 40, align: 'right' },
+      { key: 'rate', label: 'Rate', width: 52, align: 'right' },
+      { key: 'amount', label: 'Amount', width: 58, align: 'right' },
+      { key: 'notes', label: 'Notes', width: 155, align: 'left' },
+    ];
+  const baseTotal = totalWidth(base);
+  const extra = usableWidth - baseTotal;
+  if (Math.abs(extra) < 0.5) return base;
+  return base.map((column) => {
+    if (column.key === 'className') return { ...column, width: column.width + extra * 0.65 };
+    if (column.key === 'notes') return { ...column, width: column.width + extra * 0.35 };
+    return column;
+  });
+}
+
+function estimateFirstPageTableStart(density) {
+  const headerBottom = density.compactHeader ? PDF_PAGE.A4_PORTRAIT.height - 62 : PDF_PAGE.A4_PORTRAIT.height - 102;
+  const introHeight = density.singleRowMeta ? 104 : 166;
+  return headerBottom - introHeight - density.tableHeaderHeight;
+}
+
+function chooseMonthlyPlan(model) {
+  const hasOvertime = model.summary.overtimeHours > 0;
+  for (const density of MONTHLY_DENSITIES) {
+    const usableWidth = PDF_PAGE.A4_PORTRAIT.width - density.margin * 2;
+    const columns = getMonthlyColumns(model.entries, usableWidth);
+    const layouts = model.entries.map((entry) => layoutMonthlyRow(entry, columns, density));
+    const rowsHeight = layouts.length ? layouts.reduce((sum, item) => sum + item.height, 0) : 42;
+    const breakdownHeight = hasOvertime ? density.breakdownHeight * 2 : 0;
+    const footerBlock = breakdownHeight + density.totalHeight + density.sigGap + density.sigHeight;
+    const startY = estimateFirstPageTableStart(density);
+    if (startY - rowsHeight - footerBlock >= density.bottomLimit) {
+      return { density, columns, layouts };
+    }
+  }
+  const fallback = MONTHLY_DENSITIES[0];
+  const columns = getMonthlyColumns(model.entries, PDF_PAGE.A4_PORTRAIT.width - fallback.margin * 2);
+  return {
+    density: fallback,
+    columns,
+    layouts: model.entries.map((entry) => layoutMonthlyRow(entry, columns, fallback)),
+  };
+}
+
 function renderMonthReport(document, model, brandMark) {
-  const margin = 42;
-  const footerHeight = 31;
-  const bottomLimit = footerHeight + 30;
+  const { density, columns, layouts } = chooseMonthlyPlan(model);
+  const margin = density.margin;
+  const bottomLimit = density.bottomLimit;
   const pages = [];
   let page;
   let y;
@@ -156,33 +282,35 @@ function renderMonthReport(document, model, brandMark) {
       periodLabel: model.periodLabel,
       continuation,
       brandMark,
+      compact: density.compactHeader,
     });
 
     if (!continuation) {
-      y = drawMonthlyIntroduction(page, model, margin, y);
+      y = drawMonthlyIntroduction(page, model, margin, y, density);
     } else {
       page.text('DAILY HOURS AND EARNINGS - CONTINUED', margin, y - 5, { size: 8, bold: true, color: COLORS.primaryDark });
       y -= 21;
     }
-    y = drawTableHeader(page, MONTHLY_COLUMNS, margin, y);
+    y = drawTableHeader(page, columns, margin, y, density.tableHeaderHeight, density.headerFontSize, density.cellPadding);
   };
 
   addPage(false);
 
   if (!model.entries.length) {
     const rowHeight = 42;
-    drawEmptyTableRow(page, margin, y, totalWidth(MONTHLY_COLUMNS), rowHeight, 'No teaching activity has been recorded for this period.');
+    drawEmptyTableRow(page, margin, y, totalWidth(columns), rowHeight, 'No teaching activity has been recorded for this period.');
     y -= rowHeight;
   } else {
-    for (const entry of model.entries) {
-      const layout = layoutMonthlyRow(entry);
+    for (let index = 0; index < model.entries.length; index += 1) {
+      const entry = model.entries[index];
+      const layout = layouts[index];
       if (y - layout.height >= bottomLimit) {
-        drawTableRow(page, MONTHLY_COLUMNS, entry, margin, y, layout.height, rowIndex % 2 === 1, layout.lines);
+        drawTableRow(page, columns, entry, margin, y, layout.height, rowIndex % 2 === 1, layout.lines, false, false, density);
         y -= layout.height;
       } else {
         addPage(true);
         if (y - layout.height >= bottomLimit) {
-          drawTableRow(page, MONTHLY_COLUMNS, entry, margin, y, layout.height, rowIndex % 2 === 1, layout.lines);
+          drawTableRow(page, columns, entry, margin, y, layout.height, rowIndex % 2 === 1, layout.lines, false, false, density);
           y -= layout.height;
         } else {
           // Row is taller than an entire page; split its wrapped lines cleanly across pages.
@@ -190,7 +318,7 @@ function renderMonthReport(document, model, brandMark) {
           let cursor = 0;
           while (cursor < totalLines) {
             if (y - 32 < bottomLimit) addPage(true);
-            const maxLinesHere = Math.max(1, Math.floor((y - bottomLimit - 12) / layout.lineHeight));
+            const maxLinesHere = Math.max(1, Math.floor((y - bottomLimit - density.rowPad) / layout.lineHeight));
             const nextCursor = Math.min(totalLines, cursor + maxLinesHere);
             const isFirstSlice = cursor === 0;
             const sliceLines = {
@@ -203,8 +331,8 @@ function renderMonthReport(document, model, brandMark) {
               notes: layout.lines.notes.slice(cursor, nextCursor),
             };
             const sliceCount = Math.max(1, sliceLines.className.length, sliceLines.notes.length);
-            const sliceHeight = Math.max(27, 12 + sliceCount * layout.lineHeight);
-            drawTableRow(page, MONTHLY_COLUMNS, entry, margin, y, sliceHeight, rowIndex % 2 === 1, sliceLines);
+            const sliceHeight = Math.max(density.minRowHeight, density.rowPad + sliceCount * layout.lineHeight);
+            drawTableRow(page, columns, entry, margin, y, sliceHeight, rowIndex % 2 === 1, sliceLines, false, false, density);
             y -= sliceHeight;
             cursor = nextCursor;
             if (cursor < totalLines) addPage(true);
@@ -216,13 +344,13 @@ function renderMonthReport(document, model, brandMark) {
   }
 
   const hasOvertime = model.summary.overtimeHours > 0;
-  const breakdownHeight = hasOvertime ? 50 : 0;
-  const totalHeight = 31;
-  const signatureHeight = 104;
-  if (y - breakdownHeight - totalHeight - signatureHeight < bottomLimit) addPage(true);
+  const breakdownHeight = hasOvertime ? density.breakdownHeight * 2 : 0;
+  const totalHeight = density.totalHeight;
+  const signatureNeeded = density.sigGap + density.sigHeight;
+  if (y - breakdownHeight - totalHeight - signatureNeeded < bottomLimit) addPage(true);
   if (hasOvertime) {
     const s = model.summary;
-    drawMonthlySummaryBand(page, {
+    drawMonthlySummaryBand(page, columns, {
       label: `BASE SUBTOTAL (${formatHours(s.totalHours)} hrs x ${formatCurrency(model.hourlyRate)})`,
       hours: formatHours(s.totalHours),
       rate: formatCurrency(model.hourlyRate),
@@ -232,10 +360,10 @@ function renderMonthReport(document, model, brandMark) {
       borderColor: COLORS.line,
       textColor: COLORS.ink,
       amountColor: COLORS.ink,
-    }, margin, y, 25);
-    y -= 25;
-    drawMonthlySummaryBand(page, {
-      label: `OVERTIME ADJUSTMENT (${formatHours(s.overtimeHours)}h > ${formatHours(s.overtimeThresholdHours)}h x ${formatSignedCurrency(s.overtimeDeltaRate)})`,
+    }, margin, y, density.breakdownHeight, density.breakdownFontSize, density.cellPadding);
+    y -= density.breakdownHeight;
+    drawMonthlySummaryBand(page, columns, {
+      label: `OVERTIME ADJUSTMENT (${formatHours(s.overtimeHours)}h > ${formatHours(s.overtimeThresholdHours)}h)`,
       hours: `+${formatHours(s.overtimeHours)}`,
       rate: formatSignedCurrency(s.overtimeDeltaRate),
       amount: formatSignedCurrency(s.overtimeBonus),
@@ -244,12 +372,12 @@ function renderMonthReport(document, model, brandMark) {
       borderColor: [0.73, 0.90, 0.80],
       textColor: COLORS.success,
       amountColor: COLORS.success,
-    }, margin, y, 25);
-    y -= 25;
+    }, margin, y, density.breakdownHeight, density.breakdownFontSize, density.cellPadding);
+    y -= density.breakdownHeight;
   }
-  drawMonthlyTotal(page, model, margin, y, totalHeight);
+  drawMonthlyTotal(page, columns, model, margin, y, totalHeight, density.totalFontSize, density.cellPadding);
   y -= totalHeight;
-  drawSignatureSection(page, model.teacherName, margin, y - 29);
+  drawSignatureSection(page, model.teacherName, margin, y - density.sigGap, density);
 
   pages.forEach((reportPage) => drawWatermark(reportPage, brandMark, { scale: 0.47, opacity: 0.035 }));
 
@@ -309,48 +437,72 @@ function drawWatermark(page, brandMark, { scale = 0.47, opacity = 0.065 } = {}) 
   page.drawImage(brandMark, x, y, size, size, { opacity });
 }
 
-function drawReportHeader(page, { margin, reportType, periodLabel, continuation, brandMark }) {
-  const top = page.height - 22;
-  page.fillRect(0, page.height - 7, page.width, 7, COLORS.primary);
+function drawReportHeader(page, { margin, reportType, periodLabel, continuation, brandMark, compact = false }) {
+  const top = compact ? page.height - 15 : page.height - 22;
+  page.fillRect(0, page.height - (compact ? 5 : 7), page.width, compact ? 5 : 7, COLORS.primary);
 
-  const markSize = 34;
-  const markY = top - markSize - 10;
+  const markSize = compact ? 26 : 34;
+  const markY = top - markSize - (compact ? 4 : 10);
   page.fillRect(margin, markY, markSize, markSize, COLORS.soft);
   page.strokeRect(margin, markY, markSize, markSize, { color: COLORS.line, lineWidth: 0.7 });
   if (brandMark) page.drawImage(brandMark, margin + 3, markY + 3, markSize - 6, markSize - 6, { opacity: 1 });
-  else page.text('M', margin + markSize / 2, markY + 10, { size: 18, bold: true, color: COLORS.primaryDark, align: 'center' });
+  else page.text('M', margin + markSize / 2, markY + (compact ? 7 : 10), { size: compact ? 14 : 18, bold: true, color: COLORS.primaryDark, align: 'center' });
 
-  const leftX = margin + markSize + 13;
+  const leftX = margin + markSize + (compact ? 10 : 13);
   const rightX = page.width - margin;
   const availableLeft = Math.max(220, page.width * 0.56);
-  page.text(BRAND.appName.toUpperCase(), leftX, markY + 25, { size: 7.2, bold: true, color: COLORS.primary });
-  page.text(reportType, leftX, markY + 10.5, { size: 14.2, bold: true, color: COLORS.ink, maxWidth: availableLeft });
-  page.text('Teaching hours and earnings record', leftX, markY - 1, { size: 7.2, color: COLORS.muted, maxWidth: availableLeft });
+  page.text(BRAND.appName.toUpperCase(), leftX, markY + (compact ? 19.5 : 25), { size: compact ? 6.4 : 7.2, bold: true, color: COLORS.primary });
+  page.text(reportType, leftX, markY + (compact ? 8 : 10.5), { size: compact ? 12.2 : 14.2, bold: true, color: COLORS.ink, maxWidth: availableLeft });
+  page.text('Teaching hours and earnings record', leftX, markY - (compact ? 0.5 : 1), { size: compact ? 6.4 : 7.2, color: COLORS.muted, maxWidth: availableLeft });
 
-  page.text('REPORTING PERIOD', rightX, markY + 24, { size: 6.5, bold: true, color: COLORS.muted, align: 'right' });
-  page.text(periodLabel, rightX, markY + 8.5, { size: 13.5, bold: true, color: COLORS.primaryDark, align: 'right', maxWidth: page.width * 0.30 });
+  page.text('REPORTING PERIOD', rightX, markY + (compact ? 19 : 24), { size: compact ? 5.9 : 6.5, bold: true, color: COLORS.muted, align: 'right' });
+  page.text(periodLabel, rightX, markY + (compact ? 6.5 : 8.5), { size: compact ? 11.8 : 13.5, bold: true, color: COLORS.primaryDark, align: 'right', maxWidth: page.width * 0.30 });
   if (continuation) page.text('CONTINUED', rightX, markY - 2, { size: 6.5, bold: true, color: COLORS.accent, align: 'right' });
 
-  const dividerY = markY - 16;
+  const dividerY = markY - (compact ? 7 : 16);
   page.line(margin, dividerY, page.width - margin, dividerY, { color: COLORS.line, lineWidth: 0.8 });
-  return dividerY - 20;
+  return dividerY - (compact ? 10 : 20);
 }
 
-function drawMonthlyIntroduction(page, model, margin, y) {
+function drawMonthlyIntroduction(page, model, margin, y, density = MONTHLY_DENSITIES[0]) {
+  const compact = density.singleRowMeta;
+  const rateText = model.summary.overtimeEnabled
+    ? `${formatCurrency(model.hourlyRate)}/hr (>${formatHours(model.summary.overtimeThresholdHours)}h: ${formatCurrency(model.summary.overtimeHourlyRate)})`
+    : `${formatCurrency(model.hourlyRate)} / hour`;
+  const metaItems = [
+    ['Teacher', model.teacherName],
+    ['Reporting Period', model.periodLabel],
+    ['Hourly Rate', rateText],
+    ['Generated On', model.generatedLabel],
+  ];
+
+  if (compact) {
+    page.text('MONTHLY PAY RECORD', margin, y, { size: 6.4, bold: true, color: COLORS.primary });
+    page.text('Daily Teaching Hours and Earnings', margin, y - 14, { size: 13.5, bold: true, color: COLORS.ink, maxWidth: page.width - margin * 2 });
+    page.text('Teaching activity and calculated earnings for the selected reporting period.', margin, y - 24, { size: 6.8, color: COLORS.muted, maxWidth: page.width - margin * 2 });
+
+    const cardsTop = y - 32;
+    drawMetaCards(page, metaItems, margin, cardsTop, page.width - margin * 2, {
+      gap: 6,
+      cardHeight: 33,
+      labelY: 22.5,
+      valueY: 12,
+      valueSize: 6.9,
+    });
+
+    const sectionY = cardsTop - 44;
+    page.text('TEACHING ACTIVITY DETAILS', margin, sectionY, { size: 6.4, bold: true, color: COLORS.primary });
+    page.text('Daily Hours and Earnings', margin, sectionY - 12, { size: 10.2, bold: true, color: COLORS.ink });
+    page.text(`${model.entries.length} ${model.entries.length === 1 ? 'entry' : 'entries'}`, page.width - margin, sectionY - 11, { size: 6.8, bold: true, color: COLORS.primaryDark, align: 'right' });
+    return sectionY - 19;
+  }
+
   page.text('MONTHLY PAY RECORD', margin, y, { size: 7.2, bold: true, color: COLORS.primary });
   page.text('Daily Teaching Hours and Earnings', margin, y - 21, { size: 18, bold: true, color: COLORS.ink, maxWidth: page.width - margin * 2 });
   page.text('Teaching activity and calculated earnings for the selected reporting period.', margin, y - 38, { size: 8, color: COLORS.muted, maxWidth: page.width - margin * 2 });
 
   const cardsTop = y - 55;
-  const rateText = model.summary.overtimeEnabled
-    ? `${formatCurrency(model.hourlyRate)}/hr (>${formatHours(model.summary.overtimeThresholdHours)}h: ${formatCurrency(model.summary.overtimeHourlyRate)})`
-    : `${formatCurrency(model.hourlyRate)} / hour`;
-  drawMetaGrid(page, [
-    ['Teacher', model.teacherName],
-    ['Reporting Period', model.periodLabel],
-    ['Hourly Rate', rateText],
-    ['Generated On', model.generatedLabel],
-  ], margin, cardsTop, page.width - margin * 2);
+  drawMetaGrid(page, metaItems, margin, cardsTop, page.width - margin * 2);
 
   const sectionY = cardsTop - 84;
   page.text('TEACHING ACTIVITY DETAILS', margin, sectionY, { size: 7.2, bold: true, color: COLORS.primary });
@@ -419,20 +571,20 @@ function drawMetaCards(page, items, x, topY, totalCardWidth, options = {}) {
   });
 }
 
-function drawTableHeader(page, columns, x, topY, height = 25) {
+function drawTableHeader(page, columns, x, topY, height = 25, fontSize = 7, padding = 6) {
   const width = totalWidth(columns);
   page.fillRect(x, topY - height, width, height, COLORS.primarySoft);
   page.strokeRect(x, topY - height, width, height, { color: [0.77, 0.82, 1], lineWidth: 0.8 });
   let cursorX = x;
   columns.forEach((column, index) => {
     if (index) page.line(cursorX, topY - height, cursorX, topY, { color: [0.82, 0.86, 0.97], lineWidth: 0.5 });
-    drawCellLabel(page, column.label, cursorX, topY, column.width, height, { align: column.align, size: 7, bold: true, color: COLORS.primaryDark, padding: 6 });
+    drawCellLabel(page, column.label, cursorX, topY, column.width, height, { align: column.align, size: fontSize, bold: true, color: COLORS.primaryDark, padding });
     cursorX += column.width;
   });
   return topY - height;
 }
 
-function drawTableRow(page, columns, row, x, topY, height, alternate, preparedLines = null, inactive = false, total = false) {
+function drawTableRow(page, columns, row, x, topY, height, alternate, preparedLines = null, inactive = false, total = false, density = MONTHLY_DENSITIES[0]) {
   const width = totalWidth(columns);
   const bottomY = topY - height;
   const background = total ? COLORS.ink : alternate ? COLORS.alternate : COLORS.white;
@@ -448,8 +600,9 @@ function drawTableRow(page, columns, row, x, topY, height, alternate, preparedLi
       align: column.align,
       bold: total || ['date', 'amount', 'month', 'pay'].includes(column.key),
       color: total ? COLORS.white : inactive ? [0.60, 0.64, 0.70] : column.key === 'notes' ? [0.28, 0.33, 0.40] : COLORS.ink,
-      size: total ? 8.2 : 7.8,
-      padding: 6,
+      size: total ? 8.2 : density.rowFontSize,
+      lineScale: density.lineScale,
+      padding: density.cellPadding,
     });
     cursorX += column.width;
   });
@@ -469,13 +622,13 @@ function formatSignedCurrency(value) {
   return formatCurrency(0);
 }
 
-function drawMonthlySummaryBand(page, band, x, topY, height) {
+function drawMonthlySummaryBand(page, columns, band, x, topY, height, fontSize = 7.4, padding = 6) {
   const cells = [
-    { width: MONTHLY_COLUMNS[0].width + MONTHLY_COLUMNS[1].width + MONTHLY_COLUMNS[2].width, value: band.label, align: 'left', bold: true, color: band.textColor },
-    { width: MONTHLY_COLUMNS[3].width, value: band.hours, align: 'right', bold: true, color: band.textColor },
-    { width: MONTHLY_COLUMNS[4].width, value: band.rate, align: 'right', bold: false, color: band.textColor },
-    { width: MONTHLY_COLUMNS[5].width, value: band.amount, align: 'right', bold: true, color: band.amountColor },
-    { width: MONTHLY_COLUMNS[6].width, value: band.notes, align: 'left', bold: false, color: band.textColor },
+    { width: columns[0].width + columns[1].width + columns[2].width, value: band.label, align: 'left', bold: true, color: band.textColor },
+    { width: columns[3].width, value: band.hours, align: 'right', bold: true, color: band.textColor },
+    { width: columns[4].width, value: band.rate, align: 'right', bold: false, color: band.textColor },
+    { width: columns[5].width, value: band.amount, align: 'right', bold: true, color: band.amountColor },
+    { width: columns[6].width, value: band.notes, align: 'left', bold: false, color: band.textColor },
   ];
   const width = cells.reduce((total, cell) => total + cell.width, 0);
   const bottomY = topY - height;
@@ -484,18 +637,18 @@ function drawMonthlySummaryBand(page, band, x, topY, height) {
   let cursorX = x;
   cells.forEach((cell, index) => {
     if (index) page.line(cursorX, bottomY, cursorX, topY, { color: band.borderColor, lineWidth: 0.45 });
-    drawCellLabel(page, cell.value, cursorX, topY, cell.width, height, { align: cell.align, size: 7.4, bold: cell.bold, color: cell.color, padding: 6 });
+    drawCellLabel(page, cell.value, cursorX, topY, cell.width, height, { align: cell.align, size: fontSize, bold: cell.bold, color: cell.color, padding });
     cursorX += cell.width;
   });
 }
 
-function drawMonthlyTotal(page, model, x, topY, height) {
+function drawMonthlyTotal(page, columns, model, x, topY, height, fontSize = 8.2, padding = 7) {
   const cells = [
-    { width: MONTHLY_COLUMNS[0].width + MONTHLY_COLUMNS[1].width + MONTHLY_COLUMNS[2].width, value: 'MONTHLY TOTAL', align: 'left' },
-    { width: MONTHLY_COLUMNS[3].width, value: formatHours(model.summary.totalHours), align: 'right' },
-    { width: MONTHLY_COLUMNS[4].width, value: '', align: 'right' },
-    { width: MONTHLY_COLUMNS[5].width, value: formatCurrency(model.summary.totalPay), align: 'right' },
-    { width: MONTHLY_COLUMNS[6].width, value: '', align: 'left' },
+    { width: columns[0].width + columns[1].width + columns[2].width, value: 'MONTHLY TOTAL', align: 'left' },
+    { width: columns[3].width, value: formatHours(model.summary.totalHours), align: 'right' },
+    { width: columns[4].width, value: '', align: 'right' },
+    { width: columns[5].width, value: formatCurrency(model.summary.totalPay), align: 'right' },
+    { width: columns[6].width, value: '', align: 'left' },
   ];
   const width = cells.reduce((total, cell) => total + cell.width, 0);
   const bottomY = topY - height;
@@ -503,26 +656,27 @@ function drawMonthlyTotal(page, model, x, topY, height) {
   let cursorX = x;
   cells.forEach((cell, index) => {
     if (index) page.line(cursorX, bottomY, cursorX, topY, { color: [0.30, 0.35, 0.45], lineWidth: 0.45 });
-    drawCellLabel(page, cell.value, cursorX, topY, cell.width, height, { align: cell.align, size: 8.2, bold: true, color: COLORS.white, padding: 7 });
+    drawCellLabel(page, cell.value, cursorX, topY, cell.width, height, { align: cell.align, size: fontSize, bold: true, color: COLORS.white, padding });
     cursorX += cell.width;
   });
 }
 
-function drawSignatureSection(page, teacherName, margin, topY) {
+function drawSignatureSection(page, teacherName, margin, topY, density = MONTHLY_DENSITIES[0]) {
   const availableWidth = page.width - margin * 2;
   const gap = 62;
   const boxWidth = (availableWidth - gap) / 2;
-  const lineY = topY - 49;
+  const lineY = topY - density.sigLineDrop;
+  const compact = density.name !== 'normal';
 
-  page.text('Prepared by', margin + boxWidth / 2, topY, { size: 8, color: COLORS.muted, align: 'center' });
+  page.text('Prepared by', margin + boxWidth / 2, topY, { size: compact ? 7.2 : 8, color: COLORS.muted, align: 'center' });
   page.line(margin + 12, lineY, margin + boxWidth - 12, lineY, { color: [0.55, 0.59, 0.66], lineWidth: 0.7 });
-  page.text(teacherName || 'Teacher', margin + boxWidth / 2, lineY - 14, { size: 9, bold: true, color: COLORS.ink, align: 'center', maxWidth: boxWidth - 24 });
-  page.text('Teacher', margin + boxWidth / 2, lineY - 26, { size: 7.5, color: COLORS.muted, align: 'center' });
+  page.text(teacherName || 'Teacher', margin + boxWidth / 2, lineY - (compact ? 11 : 14), { size: compact ? 8.2 : 9, bold: true, color: COLORS.ink, align: 'center', maxWidth: boxWidth - 24 });
+  page.text('Teacher', margin + boxWidth / 2, lineY - (compact ? 20 : 26), { size: compact ? 6.8 : 7.5, color: COLORS.muted, align: 'center' });
 
   const secondX = margin + boxWidth + gap;
-  page.text('Reviewed by', secondX + boxWidth / 2, topY, { size: 8, color: COLORS.muted, align: 'center' });
+  page.text('Reviewed by', secondX + boxWidth / 2, topY, { size: compact ? 7.2 : 8, color: COLORS.muted, align: 'center' });
   page.line(secondX + 12, lineY, secondX + boxWidth - 12, lineY, { color: [0.55, 0.59, 0.66], lineWidth: 0.7 });
-  page.text('Reviewer', secondX + boxWidth / 2, lineY - 14, { size: 9, bold: true, color: COLORS.ink, align: 'center' });
+  page.text('Reviewer', secondX + boxWidth / 2, lineY - (compact ? 11 : 14), { size: compact ? 8.2 : 9, bold: true, color: COLORS.ink, align: 'center' });
 }
 
 function drawAnnualInsights(page, model, margin, topY) {
@@ -564,26 +718,28 @@ function addPageFooters(pages, { leftText, rightText, margin }) {
   });
 }
 
-function layoutMonthlyRow(row) {
-  const lineHeight = 7.8 * 1.25;
-  const available = Object.fromEntries(MONTHLY_COLUMNS.map((column) => [column.key, Math.max(10, column.width - 12)]));
+function layoutMonthlyRow(row, columns = MONTHLY_COLUMNS, density = MONTHLY_DENSITIES[0]) {
+  const fontSize = density.rowFontSize;
+  const lineHeight = fontSize * density.lineScale;
+  const padX = density.cellPadding * 2;
+  const available = Object.fromEntries(columns.map((column) => [column.key, Math.max(10, column.width - padX)]));
   const lines = {
     number: [row.number],
     date: [row.date],
-    className: wrapText(row.className, available.className, 7.8, false),
+    className: wrapText(row.className, available.className, fontSize, false),
     hours: [row.hours],
     rate: [row.rate],
     amount: [row.amount],
-    notes: wrapText(row.notes, available.notes, 7.8, false),
+    notes: wrapText(row.notes, available.notes, fontSize, false),
   };
   const lineCount = Math.max(...Object.values(lines).map((item) => item.length));
-  return { lines, lineHeight, height: Math.max(27, 12 + lineCount * lineHeight) };
+  return { lines, lineHeight, height: Math.max(density.minRowHeight, density.rowPad + lineCount * lineHeight) };
 }
 
-function drawTableCell(page, lines, x, topY, width, height, { align, bold, color, size, padding }) {
-  const lineHeight = size * 1.25;
+function drawTableCell(page, lines, x, topY, width, height, { align, bold, color, size, lineScale = 1.25, padding }) {
+  const lineHeight = size * lineScale;
   const contentHeight = lines.length * lineHeight;
-  const startBaseline = topY - Math.max(padding + size, (height - contentHeight) / 2 + size);
+  const startBaseline = topY - Math.max((height - contentHeight) / 2 + size * 0.85, size + 1.5);
   lines.forEach((line, index) => {
     const baseline = startBaseline - index * lineHeight;
     const anchorX = align === 'right' ? x + width - padding : align === 'center' ? x + width / 2 : x + padding;

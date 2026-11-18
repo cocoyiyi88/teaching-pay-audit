@@ -108,3 +108,33 @@ test('giant single row spanning more than one page splits cleanly without negati
   assert.equal(negativeY.length, 0);
   assert.ok(pageCount(pdf) >= 2);
 });
+
+test('full 31-day month with overtime breakdown and signatures auto-fits cleanly on one A4 Portrait page', () => {
+  const month = createMonth('2026-10', 10, {
+    overtimeEnabled: true,
+    overtimeThresholdHours: 100,
+    overtimeHourlyRate: 12,
+  });
+  for (let day = 1; day <= 31; day += 1) {
+    month.entries[day] = {
+      day,
+      className: day % 6 === 0
+        ? `2016k7 cs2, 2017k3 cs1, 8k1 cs2, 2021k4 cs2`
+        : `2021k2 cs1, 2021k9 cs1`,
+      hours: day === 24 ? 6 : day === 25 ? 4.5 : day === 31 ? 5 : 3.5,
+      notes: '',
+    };
+  }
+
+  const pdf = decodePdf(buildMonthReportPdf(month, 'Teacher Name', new Date('2026-11-18T16:50:00Z')));
+  const negativeY = pdf.match(/-\d+(\.\d+)?\s+Tm/g) || [];
+  assert.equal(negativeY.length, 0);
+  assert.equal(pageCount(pdf), 1);
+  assert.match(pdf, /Page 1 of 1/);
+  assert.match(pdf, /BASE SUBTOTAL/);
+  assert.match(pdf, /OVERTIME ADJUSTMENT/);
+  assert.match(pdf, /MONTHLY TOTAL/);
+  assert.match(pdf, /Prepared by/);
+  assert.match(pdf, /Reviewed by/);
+  assert.doesNotMatch(pdf, /OVERTIME ADJUSTMENT \([^)]*\.\.\./);
+});

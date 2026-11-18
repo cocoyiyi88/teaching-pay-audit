@@ -63,8 +63,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .summary-card { min-height: 126px; display: flex; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: 18px; background: rgba(255,255,255,.96); box-shadow: 0 8px 26px rgba(29,41,78,.05); }
 .summary-icon { flex: 0 0 auto; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 13px; color: var(--primary); background: var(--primary-soft); }
 .summary-card p { margin: 1px 0 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
-.summary-card strong { display: block; font-size: clamp(22px, 2vw, 28px); line-height: 1.1; letter-spacing: -.03em; }
-.summary-card span { display: block; margin-top: 8px; color: #8a93a5; font-size: 11px; }
+.summary-card strong { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: clamp(22px, 2vw, 28px); line-height: 1.1; letter-spacing: -.03em; }
+.summary-card > div > span { display: block; margin-top: 8px; color: #8a93a5; font-size: 11px; }
 
 .data-card { border: 1px solid var(--border); border-radius: 20px; background: white; box-shadow: var(--shadow); overflow: hidden; }
 .card-toolbar { min-height: 78px; display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
@@ -118,7 +118,7 @@ tfoot tr.subtotal-row td { position: static; padding: 11px 12px; color: #364152;
 tfoot tr.overtime-row td { position: static; padding: 11px 12px; color: var(--success); background: #ecfdf3; border-top: 1px solid #bce3cd; font-weight: 750; font-size: 13px; }
 tfoot tr.hidden { display: none; }
 .hidden { display: none !important; }
-.overtime-pill { display: inline-flex; align-items: center; margin-left: 8px; padding: 3px 8px; border-radius: 999px; font-style: normal; font-size: 11px; font-weight: 800; color: var(--success); background: #ecfdf3; border: 1px solid #bce3cd; vertical-align: middle; letter-spacing: 0; }
+.overtime-pill { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; font-style: normal; font-size: 11px; font-weight: 800; color: var(--success); background: #ecfdf3; border: 1px solid #bce3cd; letter-spacing: 0; }
 .overtime-control { min-height: 38px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; background: #fafbfc; color: var(--muted); font-size: 12px; font-weight: 650; }
 .overtime-control.active { border-color: #bce3cd; background: #f3fcf6; color: var(--success); }
 .overtime-toggle-inline { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
@@ -930,7 +930,8 @@ tfoot tr.hidden { display: none; }
 .toolbar-actions .button.compact { min-width: 76px; justify-content: center; }
 @media (max-width: 720px) {
   .toolbar-actions { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .toolbar-actions .audit-status, .toolbar-actions .rate-control { grid-column: 1 / -1; }
+  .toolbar-actions .audit-status, .toolbar-actions .rate-control, .toolbar-actions .overtime-control { grid-column: 1 / -1; }
+  .toolbar-actions .overtime-control { width: 100%; justify-content: space-between; flex-wrap: wrap; padding: 4px 10px; }
   .toolbar-actions .button.compact { width: 100%; }
 }
 
