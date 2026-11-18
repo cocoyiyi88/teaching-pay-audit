@@ -138,69 +138,78 @@ export function createYearReportModel(database, year, teacherName = 'Teacher', g
   };
 }
 
-const MONTHLY_DENSITIES = Object.freeze([
+const MONTHLY_LAYOUT_MODES = Object.freeze([
   {
-    name: 'normal',
+    name: 'full',
     margin: 42,
-    bottomLimit: 48,
+    bottomLimit: 38,
     compactHeader: false,
     singleRowMeta: false,
-    tableHeaderHeight: 25,
+    tableHeaderHeight: 24,
     headerFontSize: 7,
-    rowFontSize: 7.8,
-    lineScale: 1.25,
-    rowPad: 12,
+    minRowFontSize: 7.4,
+    maxRowFontSize: 7.8,
+    lineScale: 1.24,
+    minRowPad: 6,
+    maxRowPad: 12,
     cellPadding: 6,
-    minRowHeight: 27,
-    breakdownHeight: 25,
+    minRowHeight: 20,
+    maxMinRowHeight: 27,
+    breakdownHeight: 24,
     breakdownFontSize: 7.4,
-    totalHeight: 31,
+    totalHeight: 30,
     totalFontSize: 8.2,
-    sigGap: 29,
-    sigHeight: 76,
-    sigLineDrop: 49,
+    sigGap: 24,
+    sigHeight: 74,
+    sigLineDrop: 46,
   },
   {
-    name: 'cozy',
-    margin: 34,
+    name: 'balanced',
+    margin: 36,
     bottomLimit: 32,
-    compactHeader: true,
+    compactHeader: false,
     singleRowMeta: true,
-    tableHeaderHeight: 19,
-    headerFontSize: 6.6,
-    rowFontSize: 7.1,
+    tableHeaderHeight: 21,
+    headerFontSize: 6.8,
+    minRowFontSize: 6.9,
+    maxRowFontSize: 7.5,
     lineScale: 1.2,
-    rowPad: 6,
-    cellPadding: 5,
-    minRowHeight: 18,
-    breakdownHeight: 19,
-    breakdownFontSize: 7,
-    totalHeight: 23,
-    totalFontSize: 7.8,
-    sigGap: 16,
-    sigHeight: 60,
-    sigLineDrop: 36,
+    minRowPad: 4.5,
+    maxRowPad: 11,
+    cellPadding: 5.5,
+    minRowHeight: 15.5,
+    maxMinRowHeight: 24,
+    breakdownHeight: 20,
+    breakdownFontSize: 7.1,
+    totalHeight: 25,
+    totalFontSize: 7.9,
+    sigGap: 18,
+    sigHeight: 64,
+    sigLineDrop: 38,
   },
   {
-    name: 'compact',
+    name: 'dense',
     margin: 30,
     bottomLimit: 26,
     compactHeader: true,
     singleRowMeta: true,
-    tableHeaderHeight: 16,
-    headerFontSize: 6.3,
-    rowFontSize: 6.6,
-    lineScale: 1.15,
-    rowPad: 3.5,
+    tableHeaderHeight: 18,
+    headerFontSize: 6.5,
+    minRowFontSize: 6.4,
+    maxRowFontSize: 7.0,
+    lineScale: 1.16,
+    minRowPad: 3,
+    maxRowPad: 9,
     cellPadding: 4.5,
-    minRowHeight: 14,
-    breakdownHeight: 16,
-    breakdownFontSize: 6.6,
-    totalHeight: 20,
-    totalFontSize: 7.4,
-    sigGap: 12,
-    sigHeight: 52,
-    sigLineDrop: 30,
+    minRowHeight: 13.5,
+    maxMinRowHeight: 21,
+    breakdownHeight: 17,
+    breakdownFontSize: 6.8,
+    totalHeight: 22,
+    totalFontSize: 7.6,
+    sigGap: 14,
+    sigHeight: 56,
+    sigLineDrop: 32,
   },
 ]);
 
@@ -210,11 +219,11 @@ function getMonthlyColumns(entries, usableWidth) {
     ? [
       { key: 'number', label: 'No.', width: 24, align: 'center' },
       { key: 'date', label: 'Date', width: 28, align: 'center' },
-      { key: 'className', label: 'Class', width: 200, align: 'left' },
+      { key: 'className', label: 'Class', width: 218, align: 'left' },
       { key: 'hours', label: 'Hours', width: 38, align: 'right' },
       { key: 'rate', label: 'Rate', width: 50, align: 'right' },
       { key: 'amount', label: 'Amount', width: 58, align: 'right' },
-      { key: 'notes', label: 'Notes', width: 113, align: 'left' },
+      { key: 'notes', label: 'Notes', width: 95, align: 'left' },
     ]
     : [
       { key: 'number', label: 'No.', width: 26, align: 'center' },
@@ -229,8 +238,8 @@ function getMonthlyColumns(entries, usableWidth) {
   const extra = usableWidth - baseTotal;
   if (Math.abs(extra) < 0.5) return base;
   return base.map((column) => {
-    if (column.key === 'className') return { ...column, width: column.width + extra * 0.65 };
-    if (column.key === 'notes') return { ...column, width: column.width + extra * 0.35 };
+    if (column.key === 'className') return { ...column, width: column.width + extra * 0.72 };
+    if (column.key === 'notes') return { ...column, width: column.width + extra * 0.28 };
     return column;
   });
 }
@@ -241,21 +250,78 @@ function estimateFirstPageTableStart(density) {
   return headerBottom - introHeight - density.tableHeaderHeight;
 }
 
+function buildDensity(mode, overrides = {}) {
+  return {
+    name: mode.name,
+    margin: mode.margin,
+    bottomLimit: mode.bottomLimit,
+    compactHeader: mode.compactHeader,
+    singleRowMeta: mode.singleRowMeta,
+    tableHeaderHeight: mode.tableHeaderHeight,
+    headerFontSize: mode.headerFontSize,
+    rowFontSize: overrides.rowFontSize ?? mode.maxRowFontSize,
+    lineScale: mode.lineScale,
+    rowPad: overrides.rowPad ?? mode.maxRowPad,
+    cellPadding: mode.cellPadding,
+    minRowHeight: overrides.minRowHeight ?? mode.maxMinRowHeight,
+    breakdownHeight: mode.breakdownHeight,
+    breakdownFontSize: mode.breakdownFontSize,
+    totalHeight: mode.totalHeight,
+    totalFontSize: mode.totalFontSize,
+    sigGap: mode.sigGap,
+    sigHeight: mode.sigHeight,
+    sigLineDrop: mode.sigLineDrop,
+  };
+}
+
 function chooseMonthlyPlan(model) {
   const hasOvertime = model.summary.overtimeHours > 0;
-  for (const density of MONTHLY_DENSITIES) {
-    const usableWidth = PDF_PAGE.A4_PORTRAIT.width - density.margin * 2;
+  for (const mode of MONTHLY_LAYOUT_MODES) {
+    const usableWidth = PDF_PAGE.A4_PORTRAIT.width - mode.margin * 2;
     const columns = getMonthlyColumns(model.entries, usableWidth);
-    const layouts = model.entries.map((entry) => layoutMonthlyRow(entry, columns, density));
-    const rowsHeight = layouts.length ? layouts.reduce((sum, item) => sum + item.height, 0) : 42;
-    const breakdownHeight = hasOvertime ? density.breakdownHeight * 2 : 0;
-    const footerBlock = breakdownHeight + density.totalHeight + density.sigGap + density.sigHeight;
-    const startY = estimateFirstPageTableStart(density);
-    if (startY - rowsHeight - footerBlock >= density.bottomLimit) {
-      return { density, columns, layouts };
+    const breakdownHeight = hasOvertime ? mode.breakdownHeight * 2 : 0;
+    const footerBlock = breakdownHeight + mode.totalHeight + mode.sigGap + mode.sigHeight;
+    const availableBody = estimateFirstPageTableStart(mode) - mode.bottomLimit - footerBlock;
+
+    // Try largest readable font first, down to minRowFontSize, then expand row padding to fill the A4 page cleanly.
+    const fontSteps = [];
+    for (let size = mode.maxRowFontSize; size >= mode.minRowFontSize - 0.01; size = Math.round((size - 0.2) * 10) / 10) {
+      fontSteps.push(Math.max(mode.minRowFontSize, size));
+    }
+
+    for (const rowFontSize of fontSteps) {
+      const tightDensity = buildDensity(mode, {
+        rowFontSize,
+        rowPad: mode.minRowPad,
+        minRowHeight: mode.minRowHeight,
+      });
+      const tightLayouts = model.entries.map((entry) => layoutMonthlyRow(entry, columns, tightDensity));
+      const minRowsHeight = tightLayouts.length ? tightLayouts.reduce((sum, item) => sum + item.height, 0) : 42;
+      if (minRowsHeight > availableBody) continue;
+
+      if (!model.entries.length) {
+        return { density: buildDensity(mode, { rowFontSize }), columns, layouts: [] };
+      }
+
+      // Distribute available vertical space smoothly across rows so the page looks full & balanced (never cramped or half-empty).
+      const extraTotal = Math.max(0, availableBody - minRowsHeight);
+      const maxExpandPerRow = Math.max(0, mode.maxRowPad - mode.minRowPad);
+      const extraPerRow = Math.min(maxExpandPerRow, extraTotal / model.entries.length);
+      const fittedDensity = buildDensity(mode, {
+        rowFontSize,
+        rowPad: mode.minRowPad + extraPerRow,
+        minRowHeight: Math.min(mode.maxMinRowHeight, mode.minRowHeight + extraPerRow),
+      });
+      const layouts = model.entries.map((entry) => layoutMonthlyRow(entry, columns, fittedDensity));
+      const finalHeight = layouts.reduce((sum, item) => sum + item.height, 0);
+      if (finalHeight <= availableBody + 0.5) {
+        return { density: fittedDensity, columns, layouts };
+      }
+      return { density: tightDensity, columns, layouts: tightLayouts };
     }
   }
-  const fallback = MONTHLY_DENSITIES[0];
+
+  const fallback = buildDensity(MONTHLY_LAYOUT_MODES[0]);
   const columns = getMonthlyColumns(model.entries, PDF_PAGE.A4_PORTRAIT.width - fallback.margin * 2);
   return {
     density: fallback,
@@ -464,7 +530,7 @@ function drawReportHeader(page, { margin, reportType, periodLabel, continuation,
   return dividerY - (compact ? 10 : 20);
 }
 
-function drawMonthlyIntroduction(page, model, margin, y, density = MONTHLY_DENSITIES[0]) {
+function drawMonthlyIntroduction(page, model, margin, y, density = buildDensity(MONTHLY_LAYOUT_MODES[0])) {
   const compact = density.singleRowMeta;
   const rateText = model.summary.overtimeEnabled
     ? `${formatCurrency(model.hourlyRate)}/hr (>${formatHours(model.summary.overtimeThresholdHours)}h: ${formatCurrency(model.summary.overtimeHourlyRate)})`
@@ -584,7 +650,7 @@ function drawTableHeader(page, columns, x, topY, height = 25, fontSize = 7, padd
   return topY - height;
 }
 
-function drawTableRow(page, columns, row, x, topY, height, alternate, preparedLines = null, inactive = false, total = false, density = MONTHLY_DENSITIES[0]) {
+function drawTableRow(page, columns, row, x, topY, height, alternate, preparedLines = null, inactive = false, total = false, density = buildDensity(MONTHLY_LAYOUT_MODES[0])) {
   const width = totalWidth(columns);
   const bottomY = topY - height;
   const background = total ? COLORS.ink : alternate ? COLORS.alternate : COLORS.white;
@@ -661,12 +727,12 @@ function drawMonthlyTotal(page, columns, model, x, topY, height, fontSize = 8.2,
   });
 }
 
-function drawSignatureSection(page, teacherName, margin, topY, density = MONTHLY_DENSITIES[0]) {
+function drawSignatureSection(page, teacherName, margin, topY, density = buildDensity(MONTHLY_LAYOUT_MODES[0])) {
   const availableWidth = page.width - margin * 2;
   const gap = 62;
   const boxWidth = (availableWidth - gap) / 2;
   const lineY = topY - density.sigLineDrop;
-  const compact = density.name !== 'normal';
+  const compact = density.name === 'dense';
 
   page.text('Prepared by', margin + boxWidth / 2, topY, { size: compact ? 7.2 : 8, color: COLORS.muted, align: 'center' });
   page.line(margin + 12, lineY, margin + boxWidth - 12, lineY, { color: [0.55, 0.59, 0.66], lineWidth: 0.7 });
@@ -718,7 +784,7 @@ function addPageFooters(pages, { leftText, rightText, margin }) {
   });
 }
 
-function layoutMonthlyRow(row, columns = MONTHLY_COLUMNS, density = MONTHLY_DENSITIES[0]) {
+function layoutMonthlyRow(row, columns = MONTHLY_COLUMNS, density = buildDensity(MONTHLY_LAYOUT_MODES[0])) {
   const fontSize = density.rowFontSize;
   const lineHeight = fontSize * density.lineScale;
   const padX = density.cellPadding * 2;
