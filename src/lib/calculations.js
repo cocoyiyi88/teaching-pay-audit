@@ -7,8 +7,10 @@ export function normalizeHours(value) {
 export function calculatePay(hours, rate) {
   const numericHours = Number(hours);
   const safeHours = Number.isFinite(numericHours) ? Math.max(0, numericHours) : 0;
-  const safeRate = Math.max(0, Number(rate) || 0);
-  return Math.round(safeHours * safeRate * 100) / 100;
+  const numericRate = Number(rate);
+  const safeRate = Number.isFinite(numericRate) ? Math.max(0, numericRate) : 0;
+  const cents = Math.round(safeHours * 100) * safeRate;
+  return Math.round(cents + Number.EPSILON * cents) / 100;
 }
 
 export function summarizeMonth(month) {
@@ -20,7 +22,7 @@ export function summarizeMonth(month) {
     monthKey: month.monthKey,
     activeDays: workedEntries.length,
     totalHours,
-    totalPay: calculatePay(totalHours, month.hourlyRate),
+    totalPay: entries.reduce((cents, entry) => cents + Math.round(calculatePay(normalizeHours(entry.hours), month.hourlyRate) * 100), 0) / 100,
     averageHours: workedEntries.length ? Math.round((totalHours / workedEntries.length) * 100) / 100 : 0,
   };
 }

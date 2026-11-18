@@ -11,6 +11,18 @@ service cloud.firestore {
         && request.auth.token.firebase.sign_in_provider == 'password';
     }
 
+    function validSettings(settings) {
+      return settings is map
+        && settings.keys().hasOnly(['teacherName', 'profileNameUpdatedAt', 'defaultHourlyRate', 'isPristine', 'updatedAt'])
+        && settings.get('teacherName', '') is string
+        && settings.get('teacherName', '').size() <= 100
+        && settings.get('profileNameUpdatedAt', '') is string
+        && settings.get('defaultHourlyRate', 10) is number
+        && settings.get('defaultHourlyRate', 10) >= 0
+        && settings.get('isPristine', true) is bool
+        && settings.get('updatedAt', '') is string;
+    }
+
     match /users/{userId}/profile/account {
       allow get: if isOwner(userId);
       allow list: if false;
@@ -36,7 +48,7 @@ service cloud.firestore {
       allow list: if false;
       allow create, update: if isOwner(userId)
         && request.resource.data.keys().hasOnly(['settings', 'monthKeys', 'updatedAt'])
-        && request.resource.data.settings is map
+        && validSettings(request.resource.data.settings)
         && request.resource.data.monthKeys is list
         && request.resource.data.monthKeys.size() <= 600
         && request.resource.data.updatedAt is string;
@@ -48,15 +60,25 @@ service cloud.firestore {
         && monthKey.matches('^[0-9]{4}-(0[1-9]|1[0-2])$');
       allow list: if false;
       allow create, update: if isOwner(userId)
-        && monthKey.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
-        && request.resource.data.keys().hasOnly(['monthKey', 'hourlyRate', 'entries', 'isPristine', 'updatedAt'])
+        && validMonth(monthKey);
+      allow delete: if isOwner(userId);
+    }
+
+    function validMonth(monthKey) {
+      let entries = request.resource.data.entries;
+      return monthKey.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
+        && request.resource.data.keys().hasOnly(['monthKey', 'hourlyRate', 'entries', 'isPristine', 'updatedAt', 'rateUpdatedAt'])
         && request.resource.data.monthKey == monthKey
         && request.resource.data.hourlyRate is number
         && request.resource.data.hourlyRate >= 0
-        && request.resource.data.entries is map
+        && request.resource.data.get('rateUpdatedAt', '') is string
+        && entries is map
+        && entries.keys().hasOnly([
+          '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16',
+          '17', '18', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', '31'
+        ])
         && request.resource.data.isPristine is bool
         && request.resource.data.updatedAt is string;
-      allow delete: if isOwner(userId);
     }
 
     match /{document=**} {

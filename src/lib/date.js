@@ -1,12 +1,15 @@
 const longFormatter = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' });
 
 export function toMonthKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  return `${String(date.getFullYear()).padStart(4, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
 export function parseMonthKey(monthKey) {
   const [year, month] = monthKey.split('-').map(Number);
-  return new Date(year, month - 1, 1);
+  const date = new Date(0);
+  date.setFullYear(year, month - 1, 1);
+  date.setHours(12, 0, 0, 0);
+  return date;
 }
 
 export function formatMonthKey(monthKey) {
@@ -20,8 +23,9 @@ export function shiftMonth(monthKey, delta) {
 }
 
 export function getDaysInMonth(monthKey) {
-  const [year, month] = monthKey.split('-').map(Number);
-  return new Date(year, month, 0).getDate();
+  const date = parseMonthKey(monthKey);
+  date.setMonth(date.getMonth() + 1, 0);
+  return date.getDate();
 }
 
 export function getMonthKeysForYear(year) {

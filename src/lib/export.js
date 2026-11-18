@@ -16,7 +16,10 @@ function download(content, type, filename) {
 }
 
 function csvCell(value) {
-  const text = String(value ?? '');
+  const raw = String(value ?? '');
+  const text = typeof value === 'string' && (/^[\t\r\n]/.test(raw) || /^[\s\uFEFF]*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20]/u.test(raw))
+    ? "'" + raw
+    : raw;
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDatabase, createMonth, mergeDatabases } from '../src/lib/database.js';
+import { createDatabase, createMonth, markMonthEdited, mergeDatabases } from '../src/lib/database.js';
 
 test('cloud month data wins over a newly created empty local month', () => {
   const local = createDatabase();
@@ -47,4 +47,22 @@ test('cloud settings are not overwritten by default settings from a new device',
   const merged = mergeDatabases(local, remote);
   assert.equal(merged.settings.teacherName, 'Ipul');
   assert.equal(merged.settings.defaultHourlyRate, 12);
+});
+
+test('concurrent edits on different days survive, including an explicit clear', () => {
+  const key = '2026-08';
+  const baseline = createDatabase();
+  baseline.months[key] = createMonth(key, 10);
+  baseline.months[key].entries[1].className = 'Old entry';
+  markMonthEdited(baseline.months[key], { day: 1 });
+  const local = structuredClone(baseline);
+  const remote = structuredClone(baseline);
+  local.months[key].entries[1].className = '';
+  markMonthEdited(local.months[key], { day: 1 });
+  remote.months[key].entries[2].className = 'New entry';
+  markMonthEdited(remote.months[key], { day: 2 });
+  for (const merged of [mergeDatabases(local, remote), mergeDatabases(remote, local)]) {
+    assert.equal(merged.months[key].entries[1].className, '');
+    assert.equal(merged.months[key].entries[2].className, 'New entry');
+  }
 });

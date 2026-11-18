@@ -45,3 +45,9 @@ test('supports multiline class details up to 500 characters', () => {
   assert.equal(validateEntry({ className: multiline, hours: 4, notes: '' }), '');
   assert.match(validateEntry({ className: 'A'.repeat(501), hours: 4, notes: '' }), /500 characters/i);
 });
+
+test('monthly earnings equal the sum of displayed daily amounts', () => {
+  const month = { hourlyRate: 15.50, entries: { 1: { hours: 0.25 }, 2: { hours: 0.25 } } };
+  assert.equal(calculatePay(0.25, month.hourlyRate), 3.88);
+  assert.equal(summarizeMonth(month).totalPay, 7.76);
+});

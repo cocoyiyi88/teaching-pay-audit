@@ -18,7 +18,13 @@ const types = {
 };
 
 createServer(async (request, response) => {
-  const pathname = decodeURIComponent(new URL(request.url || '/', `http://${request.headers.host}`).pathname);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(new URL(request.url || '/', 'http://localhost').pathname);
+  } catch {
+    response.writeHead(400).end('Invalid request URL');
+    return;
+  }
   let file = resolve(root, `.${pathname}`);
   if (file !== root && !file.startsWith(`${root}${sep}`)) {
     response.writeHead(403).end('Forbidden');
@@ -28,7 +34,8 @@ createServer(async (request, response) => {
     const info = await stat(file);
     if (info.isDirectory()) file = resolve(file, 'index.html');
   } catch {
-    file = resolve(root, 'index.html');
+    response.writeHead(404).end('Not found');
+    return;
   }
   try {
     const body = await readFile(file);
@@ -37,4 +44,4 @@ createServer(async (request, response) => {
   } catch {
     response.writeHead(404).end('Not found');
   }
-}).listen(port, () => console.log(`${BRAND.appName} is running at http://localhost:${port}`));
+}).listen(port, '127.0.0.1', () => console.log(`${BRAND.appName} is running at http://127.0.0.1:${port}`));

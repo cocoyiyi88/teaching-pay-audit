@@ -1,13 +1,10 @@
-import { createDatabase, sanitizeDatabase } from './database.js';
+import { createDatabase, mergeDatabases, sanitizeDatabase } from './database.js';
 
 const SESSION_KEY = 'audit-gaji-firebase-user-session-v3';
 const LEGACY_SESSION_KEY = 'audit-gaji-firebase-anonymous-session-v2';
 const MAX_MONTHS = 600;
-const MAX_MONTH_WRITES_PER_COMMIT = 400;
+const MAX_MONTH_WRITES_PER_COMMIT = 40;
 const EPOCH = '1970-01-01T00:00:00.000Z';
-// SuperApp dashboard trigger. Sends only the Firebase ID token; SuperApp re-reads Firestore itself.
-const SUPERAPP_SIGNAL_URL = 'https://charisna-superapp.charisna-superapp.workers.dev/connector/signal';
-
 const FATAL_REFRESH_ERRORS = new Set([
   'INVALID_REFRESH_TOKEN',
   'TOKEN_EXPIRED',
@@ -18,6 +15,7 @@ const FATAL_REFRESH_ERRORS = new Set([
 
 export class FirebaseRestClient {
   #refreshPromise = null;
+  #sessionGeneration = 0;
 
   constructor(config) {
     this.apiKey = String(config?.apiKey || '').trim();
@@ -57,11 +55,8 @@ export class FirebaseRestClient {
     try {
       return await this.#validSession();
     } catch (error) {
-      if (error?.fatal) {
-        this.signOut();
-        return null;
-      }
-      return session;
+      const current = this.session;
+      return error?.fatal || current?.uid !== session.uid ? null : current;
     }
   }
 
@@ -155,6 +150,7 @@ export class FirebaseRestClient {
   }
 
   signOut() {
+    this.#sessionGeneration += 1;
     this.#refreshPromise = null;
     try {
       localStorage.removeItem(SESSION_KEY);
@@ -213,87 +209,53 @@ export class FirebaseRestClient {
   async saveChanges(database, changedMonthKeys = [], options = {}) {
     const session = await this.connect();
     const safeDatabase = sanitizeDatabase(database);
-    const allMonthKeys = Object.keys(safeDatabase.months).filter(isMonthKey).sort().slice(-MAX_MONTHS);
     const changedKeys = [...new Set(changedMonthKeys.filter(isMonthKey))]
       .filter((monthKey) => Boolean(safeDatabase.months[monthKey]));
-    const revision = new Date().toISOString();
     const chunks = chunk(changedKeys, MAX_MONTH_WRITES_PER_COMMIT);
-    if (chunks.length === 0) chunks.push([]);
+    if (!chunks.length) chunks.push([]);
 
     const root = this.#userRoot(session.uid);
-    for (let index = 0; index < chunks.length; index += 1) {
-      const monthKeys = chunks[index];
-      const isFinalChunk = index === chunks.length - 1;
-      const writes = monthKeys.map((monthKey) => createUpdateWrite(
-        this.#documentName(`${root}/salaryAuditMonths/${monthKey}`),
-        safeDatabase.months[monthKey],
-      ));
-
-      if (isFinalChunk) {
-        writes.push(createUpdateWrite(
-          this.#documentName(`${root}/salaryAudit/database`),
-          {
-            settings: safeDatabase.settings,
-            monthKeys: allMonthKeys,
-            updatedAt: revision,
-          },
+    const metadataPath = root + '/salaryAudit/database';
+    let revision = EPOCH;
+    for (const monthKeys of chunks) {
+      for (let attempt = 0; ; attempt += 1) {
+        const metadata = await this.#firestore(metadataPath, { allowNotFound: true, uid: session.uid });
+        const remoteMetadata = decodeMap(metadata?.fields || {});
+        const remoteMonths = await mapWithConcurrency(monthKeys, 6, (key) => (
+          this.#firestore(root + '/salaryAuditMonths/' + key, { allowNotFound: true, uid: session.uid })
         ));
+        const remote = {
+          settings: remoteMetadata.settings,
+          months: Object.fromEntries(monthKeys.flatMap((key, index) => (
+            remoteMonths[index]?.fields ? [[key, decodeMap(remoteMonths[index].fields)]] : []
+          ))),
+        };
+        const merged = mergeDatabases(safeDatabase, remote);
+        const priorKeys = Array.isArray(remoteMetadata.monthKeys) ? remoteMetadata.monthKeys.filter(isMonthKey) : [];
+        const index = [...new Set([...priorKeys, ...monthKeys])].sort().slice(-MAX_MONTHS);
+        revision = new Date(Math.max(Date.now(), Date.parse(validRevision(remoteMetadata.updatedAt)) + 1)).toISOString();
+        const writes = monthKeys.map((key, position) => versionedWrite(
+          this.#documentName(root + '/salaryAuditMonths/' + key), merged.months[key], remoteMonths[position],
+        ));
+        writes.push(versionedWrite(this.#documentName(metadataPath), {
+          settings: merged.settings, monthKeys: index, updatedAt: revision,
+        }, metadata));
+
+        try {
+          await this.#commit(writes, { keepalive: options.keepalive, uid: session.uid });
+          break;
+        } catch (error) {
+          const conflict = ['ABORTED', 'FAILED_PRECONDITION', 'ALREADY_EXISTS'].includes(error.code);
+          if (!conflict || attempt >= 2 || options.keepalive) throw error;
+        }
       }
-
-      await this.#commit(writes, { keepalive: Boolean(options.keepalive && isFinalChunk) });
     }
-    // Only reached after every Firestore commit succeeded.
-    this.#notifySuperApp(session, options);
     return revision;
-  }
-
-  async saveSettings(settings, monthKeys = [], options = {}) {
-    const session = await this.connect();
-    const revision = new Date().toISOString();
-    const safeMonthKeys = [...new Set(monthKeys.filter(isMonthKey))].sort().slice(-MAX_MONTHS);
-    const root = this.#userRoot(session.uid);
-    await this.#commit([
-      createUpdateWrite(this.#documentName(`${root}/salaryAudit/database`), {
-        settings,
-        monthKeys: safeMonthKeys,
-        updatedAt: revision,
-      }),
-    ], options);
-    this.#notifySuperApp(session, options);
-    return revision;
-  }
-
-  async saveMonth(month, options = {}) {
-    const session = await this.connect();
-    if (!month || !isMonthKey(month.monthKey)) throw new Error('The cloud month data is invalid.');
-    const root = this.#userRoot(session.uid);
-    await this.#commit([
-      createUpdateWrite(this.#documentName(`${root}/salaryAuditMonths/${month.monthKey}`), month),
-    ], options);
-    this.#notifySuperApp(session, options);
   }
 
   async syncAll(database, options = {}) {
     const monthKeys = Object.keys(database?.months || {}).filter(isMonthKey);
     return this.saveChanges(database, monthKeys, options);
-  }
-
-  // Best-effort, fire-and-forget. Never throws and never delays or fails the save; SuperApp Cron is the fallback.
-  // pagehide/keepalive delivery is not guaranteed.
-  #notifySuperApp(session, options = {}) {
-    try {
-      if (typeof fetch !== 'function' || !session?.idToken) return;
-      fetch(SUPERAPP_SIGNAL_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idToken: session.idToken }),
-        keepalive: Boolean(options.keepalive),
-        credentials: 'omit',
-        referrerPolicy: 'no-referrer',
-      }).catch(() => {});
-    } catch {
-      // Signal failure must never affect saving.
-    }
   }
 
   #assertConfigured() {
@@ -319,6 +281,8 @@ export class FirebaseRestClient {
   }
 
   #storeSession(session) {
+    this.#sessionGeneration += 1;
+    this.#refreshPromise = null;
     try {
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
       localStorage.removeItem(LEGACY_SESSION_KEY);
@@ -335,7 +299,8 @@ export class FirebaseRestClient {
 
     if (this.#refreshPromise) return this.#refreshPromise;
 
-    this.#refreshPromise = (async () => {
+    const generation = this.#sessionGeneration;
+    const request = (async () => {
       const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(this.apiKey)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -347,9 +312,14 @@ export class FirebaseRestClient {
       } catch {
         data = null;
       }
+      const current = this.session;
+      if (generation !== this.#sessionGeneration || current?.uid !== session.uid
+        || current.idToken !== session.idToken || current.refreshToken !== session.refreshToken) {
+        throw new Error('Your session changed. Please try again.');
+      }
       if (!response.ok) {
         const rawCode = String(data?.error?.message || 'TOKEN_REFRESH_FAILED').split(' : ')[0];
-        const fatal = response.status === 400 || FATAL_REFRESH_ERRORS.has(rawCode);
+        const fatal = FATAL_REFRESH_ERRORS.has(rawCode);
         if (fatal) this.signOut();
         const err = new Error(authMessage(rawCode));
         err.fatal = fatal;
@@ -365,10 +335,11 @@ export class FirebaseRestClient {
       };
       return this.#storeSession(refreshed);
     })().finally(() => {
-      this.#refreshPromise = null;
+      if (this.#refreshPromise === request) this.#refreshPromise = null;
     });
 
-    return this.#refreshPromise;
+    this.#refreshPromise = request;
+    return request;
   }
 
   #documentName(path) {
@@ -377,6 +348,7 @@ export class FirebaseRestClient {
 
   async #commit(writes, options = {}) {
     const session = await this.#validSession();
+    if (options.uid && session.uid !== options.uid) throw new Error('Your session changed. Please try again.');
     const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(this.projectId)}/databases/(default)/documents:commit`;
     const response = await fetch(url, {
       method: 'POST',
@@ -394,6 +366,7 @@ export class FirebaseRestClient {
 
   async #firestore(path, options = {}) {
     const session = await this.#validSession();
+    if (options.uid && session.uid !== options.uid) throw new Error('Your session changed. Please try again.');
     const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(this.projectId)}/databases/(default)/documents/${path}`;
     const response = await fetch(url, {
       method: options.method || 'GET',
@@ -488,6 +461,12 @@ function normalizeEmail(value) {
 
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function versionedWrite(name, fields, previous) {
+  const write = createUpdateWrite(name, fields);
+  write.currentDocument = previous?.updateTime ? { updateTime: previous.updateTime } : { exists: false };
+  return write;
 }
 
 function createUpdateWrite(documentName, object) {

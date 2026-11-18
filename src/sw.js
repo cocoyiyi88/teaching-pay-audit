@@ -1,13 +1,13 @@
-const CACHE = 'mysalary-v2.3.1';
-const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/brand.js', '/config.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/brand-mark.png', '/lib/date.js', '/lib/calculations.js', '/lib/database.js', '/lib/storage.js', '/lib/export.js', '/lib/pdf-report.js', '/lib/pdf-core.js', '/lib/brand-art.js', '/lib/report-image.js', '/lib/xlsx-export.js', '/lib/firebase-rest.js', '/lib/logout-guard.js'];
+const CACHE_PREFIX = 'mysalary-';
+const CACHE = CACHE_PREFIX + '__BUILD_CACHE_ID__';
+const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/brand.js', '/config.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/brand-mark.png', '/lib/date.js', '/lib/calculations.js', '/lib/database.js', '/lib/storage.js', '/lib/export.js', '/lib/pdf-report.js', '/lib/pdf-core.js', '/lib/brand-art.js', '/lib/report-image.js', '/lib/xlsx-export.js', '/lib/firebase-rest.js', '/lib/logout-guard.js', '/lib/sync-vault.js', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))));
+  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE).map((key) => caches.delete(key)))));
   self.clients.claim();
 });
 

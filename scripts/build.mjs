@@ -1,4 +1,5 @@
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { BRAND, BRAND_TITLE } from '../src/brand.js';
 
@@ -31,6 +32,19 @@ manifest.short_name = BRAND.appName;
 manifest.description = BRAND.description;
 manifest.lang = BRAND.locale;
 await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+const hash = createHash('sha256');
+const files = (await readdir(output, { recursive: true, withFileTypes: true }))
+  .filter((entry) => entry.isFile())
+  .map((entry) => resolve(entry.parentPath ?? entry.path, entry.name))
+  .sort();
+for (const file of files) {
+  const content = await readFile(file);
+  hash.update(String(content.length)).update(':').update(content);
+}
+const worker = resolve(output, 'sw.js');
+const workerSource = await readFile(worker, 'utf8');
+await writeFile(worker, workerSource.replace('__BUILD_CACHE_ID__', hash.digest('hex').slice(0, 16)), 'utf8');
 
 function escapeHtml(value) {
   return String(value)

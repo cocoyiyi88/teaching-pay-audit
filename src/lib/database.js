@@ -78,6 +78,9 @@ export function sanitizeDatabase(candidate) {
     const safeRate = Number.isFinite(rate) ? Math.max(0, rate) : database.settings.defaultHourlyRate;
     const month = createMonth(monthKey, safeRate);
     month.updatedAt = validTimestamp(rawMonth.updatedAt, EPOCH);
+    if (typeof rawMonth.rateUpdatedAt === 'string') {
+      month.rateUpdatedAt = validTimestamp(rawMonth.rateUpdatedAt, EPOCH);
+    }
     const rawEntries = rawMonth.entries && typeof rawMonth.entries === 'object' ? rawMonth.entries : {};
     for (let day = 1; day <= getDaysInMonth(monthKey); day += 1) {
       const source = rawEntries[day];
@@ -87,6 +90,7 @@ export function sanitizeDatabase(candidate) {
         className: typeof source.className === 'string' ? source.className.slice(0, 500) : '',
         hours: normalizeHours(source.hours),
         notes: typeof source.notes === 'string' ? source.notes.slice(0, 500) : '',
+        ...(typeof source.updatedAt === 'string' ? { updatedAt: validTimestamp(source.updatedAt, EPOCH) } : {}),
       };
     }
     month.isPristine = typeof rawMonth.isPristine === 'boolean'
@@ -108,14 +112,45 @@ export function mergeDatabases(local, remote) {
     const right = safeRemote.months[key];
     if (!left) months[key] = right;
     else if (!right) months[key] = left;
-    else months[key] = pickNewestMeaningful(left, right);
+    else months[key] = mergeMonths(left, right);
   }
   return sanitizeDatabase({ version: 2, settings, months });
 }
 
-export function markMonthEdited(month) {
+function mergeMonths(left, right) {
+  const newest = pickNewestMeaningful(left, right);
+  if (left.isPristine || right.isPristine) return newest;
+
+  const leftRateTime = left.rateUpdatedAt ?? left.updatedAt;
+  const rightRateTime = right.rateUpdatedAt ?? right.updatedAt;
+  const rateWinner = compareTime(rightRateTime, leftRateTime) > 0 ? right : left;
+  const entries = {};
+  for (const [day, entry] of Object.entries(left.entries)) {
+    const incoming = right.entries[day];
+    const localTime = entry.updatedAt ?? left.updatedAt;
+    const remoteTime = incoming.updatedAt ?? right.updatedAt;
+    entries[day] = compareTime(remoteTime, localTime) > 0
+      ? { ...incoming, updatedAt: remoteTime }
+      : { ...entry, updatedAt: localTime };
+  }
+  return {
+    ...newest,
+    entries,
+    hourlyRate: rateWinner.hourlyRate,
+    rateUpdatedAt: rateWinner.rateUpdatedAt ?? rateWinner.updatedAt,
+  };
+}
+
+export function markMonthEdited(month, { day, rate = false } = {}) {
+  const previous = month.updatedAt;
+  const next = new Date(Math.max(Date.now(), Date.parse(previous) + 1)).toISOString();
+  for (const entry of Object.values(month.entries)) {
+    if (entry.day === day || (!day && !rate)) entry.updatedAt = next;
+    else entry.updatedAt ??= previous;
+  }
+  month.rateUpdatedAt = rate ? next : month.rateUpdatedAt ?? previous;
   month.isPristine = false;
-  month.updatedAt = timestamp();
+  month.updatedAt = next;
   return month;
 }
 

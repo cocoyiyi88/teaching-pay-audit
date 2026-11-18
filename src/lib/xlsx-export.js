@@ -41,7 +41,7 @@ export function buildMonthXlsxBytes(month, displayName = 'Teacher', chartPngByte
       const r = detailStart + index;
       detailRows.push(row(r, [
         num(`A${r}`, index + 1, 6), str(`B${r}`, `${month.monthKey}-${String(entry.day).padStart(2, '0')}`, 6), str(`C${r}`, entry.className || '-', 12),
-        num(`D${r}`, Number(entry.hours) || 0, 7), num(`E${r}`, month.hourlyRate, 8), formula(`F${r}`, `D${r}*E${r}`, calculatePay(entry.hours, month.hourlyRate), 8), str(`G${r}`, entry.notes || '', 12),
+        num(`D${r}`, Number(entry.hours) || 0, 7), num(`E${r}`, month.hourlyRate, 8), formula(`F${r}`, `ROUND(D${r}*E${r},2)`, calculatePay(entry.hours, month.hourlyRate), 8), str(`G${r}`, entry.notes || '', 12),
       ], Math.max(24, 18 + 15 * Math.max(lineCount(entry.className), lineCount(entry.notes)))));
     });
   } else {

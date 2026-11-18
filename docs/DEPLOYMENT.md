@@ -30,3 +30,15 @@ Redeploy after changing environment variables.
 7. Download monthly and annual PDFs.
 8. Test JSON backup/restore.
 9. Test safe sign-out.
+
+## Firestore rules rollout for per-entry synchronization
+
+Validate rules with Firestore Emulator before deploying. Exercise legacy month documents
+and documents containing entry timestamps and an optional rate timestamp. Publish rules
+before publishing the web build because the previous rules reject the new rate field.
+Keep the expanded rules when rolling back the web build so the older client can still
+write. Older clients write whole-month snapshots, so have users close existing tabs and
+reopen the app after rollout to limit mixed-version editing.
+
+Browser writes no longer send Firebase ID tokens to the SuperApp. Verify that the
+SuperApp scheduler imports a saved change before relying on refreshed dashboard data.

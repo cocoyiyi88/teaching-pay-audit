@@ -37,7 +37,14 @@ async function readIndexedDb(scope) {
   if (!('indexedDB' in window)) return null;
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, 'readonly');
+    let transaction;
+    try {
+      transaction = database.transaction(STORE_NAME, 'readonly');
+    } catch (error) {
+      database.close();
+      reject(error);
+      return;
+    }
     const request = transaction.objectStore(STORE_NAME).get(indexedDbKey(scope));
     request.onsuccess = () => resolve(request.result ? sanitizeDatabase(request.result) : null);
     request.onerror = () => {
@@ -45,7 +52,10 @@ async function readIndexedDb(scope) {
       reject(request.error || new Error('IndexedDB data could not be read.'));
     };
     transaction.oncomplete = () => database.close();
-    transaction.onabort = () => database.close();
+    transaction.onabort = () => {
+      database.close();
+      reject(transaction.error || new Error('IndexedDB transaction was aborted.'));
+    };
   });
 }
 
@@ -53,7 +63,14 @@ async function writeIndexedDb(value, scope) {
   if (!('indexedDB' in window)) throw new Error('IndexedDB is not available.');
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    let transaction;
+    try {
+      transaction = database.transaction(STORE_NAME, 'readwrite');
+    } catch (error) {
+      database.close();
+      reject(error);
+      return;
+    }
     transaction.objectStore(STORE_NAME).put(value, indexedDbKey(scope));
     transaction.oncomplete = () => {
       database.close();
@@ -63,7 +80,10 @@ async function writeIndexedDb(value, scope) {
       database.close();
       reject(transaction.error || new Error('Data could not be saved to IndexedDB.'));
     };
-    transaction.onabort = () => database.close();
+    transaction.onabort = () => {
+      database.close();
+      reject(transaction.error || new Error('IndexedDB transaction was aborted.'));
+    };
   });
 }
 
@@ -71,7 +91,14 @@ async function deleteIndexedDb(scope) {
   if (!('indexedDB' in window)) return;
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    let transaction;
+    try {
+      transaction = database.transaction(STORE_NAME, 'readwrite');
+    } catch (error) {
+      database.close();
+      reject(error);
+      return;
+    }
     transaction.objectStore(STORE_NAME).delete(indexedDbKey(scope));
     transaction.oncomplete = () => {
       database.close();
@@ -81,7 +108,10 @@ async function deleteIndexedDb(scope) {
       database.close();
       reject(transaction.error || new Error('IndexedDB data could not be cleared.'));
     };
-    transaction.onabort = () => database.close();
+    transaction.onabort = () => {
+      database.close();
+      reject(transaction.error || new Error('IndexedDB transaction was aborted.'));
+    };
   });
 }
 

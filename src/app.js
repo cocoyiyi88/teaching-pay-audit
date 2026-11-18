@@ -54,6 +54,8 @@ let settingsDirty = false;
 let changeVersion = 0;
 let localSaveTimer;
 let cloudSaveTimer;
+let cloudRetryAt = 0;
+let cloudFailures = 0;
 let cloudFlushPromise = null;
 let cloudFlushQueued = false;
 let pollTimer;
@@ -562,6 +564,8 @@ async function signOutCurrentUser() {
   cloudFlushQueued = false;
   cloudFlushPromise = null;
   lastCloudRevision = EPOCH;
+  cloudRetryAt = 0;
+  cloudFailures = 0;
   state.currentUser = null;
   state.localScope = 'legacy';
   state.database = ensureMonth(createDatabase(), state.monthKey);
@@ -596,7 +600,7 @@ function handleInput(event) {
       if (Number(input.value) > 24 || Number(input.value) < 0) input.value = entry.hours ? String(entry.hours) : '';
     }
     else entry[input.dataset.field] = input.value;
-    markMonthEdited(currentMonth());
+    markMonthEdited(currentMonth(), { day });
     markChanged({ monthKey: state.monthKey });
     updateMonthlyComputed();
     return;
@@ -604,7 +608,7 @@ function handleInput(event) {
 
   if (input.dataset.monthRate === 'true') {
     currentMonth().hourlyRate = Math.max(0, Number(input.value) || 0);
-    markMonthEdited(currentMonth());
+    markMonthEdited(currentMonth(), { rate: true });
     markChanged({ monthKey: state.monthKey });
     updateMonthlyComputed();
     return;
@@ -723,9 +727,12 @@ function changeMonth(monthKey, { skipRender = false } = {}) {
 
 function clearCurrentMonth() {
   if (!window.confirm(`Clear all data for ${formatMonthKey(state.monthKey)}? This action cannot be undone without a backup.`)) return;
-  const rate = currentMonth().hourlyRate;
-  state.database.months[state.monthKey] = createMonth(state.monthKey, rate);
-  markMonthEdited(state.database.months[state.monthKey]);
+  const previous = currentMonth();
+  const cleared = createMonth(state.monthKey, previous.hourlyRate);
+  cleared.updatedAt = previous.updatedAt;
+  cleared.rateUpdatedAt = previous.rateUpdatedAt ?? previous.updatedAt;
+  markMonthEdited(cleared);
+  state.database.months[state.monthKey] = cleared;
   markChanged({ monthKey: state.monthKey });
   render();
   showToast('The selected month was cleared successfully.', 'success');
@@ -767,6 +774,8 @@ async function connectAndSync({ silent = false } = {}) {
 
 async function syncNow() {
   if (!cloud.configured || !cloud.authenticated) return;
+  cloudRetryAt = 0;
+  cloudFailures = 0;
   state.busy = true;
   state.cloudStatus = 'syncing';
   state.cloudError = '';
@@ -822,10 +831,12 @@ function markChanged({ monthKey = '', settings = false } = {}) {
 function scheduleCloudFlush(delay = CLOUD_SAVE_DEBOUNCE_MS) {
   clearTimeout(cloudSaveTimer);
   if (!cloud.configured || !cloud.authenticated || !navigator.onLine || (!dirtyMonthKeys.size && !settingsDirty)) return;
-  cloudSaveTimer = setTimeout(() => flushCloudChanges(), Math.max(0, delay));
+  if (!Number.isFinite(cloudRetryAt)) return;
+  cloudSaveTimer = setTimeout(() => flushCloudChanges(), Math.max(0, delay, cloudRetryAt - Date.now()));
 }
 
 async function flushCloudChanges({ keepalive = false, immediate = false, throwOnError = false } = {}) {
+  if (!throwOnError && cloudRetryAt > Date.now()) return;
   clearTimeout(cloudSaveTimer);
   if (!cloud.configured || !cloud.authenticated || !navigator.onLine || (!dirtyMonthKeys.size && !settingsDirty)) return;
   if (keepalive && !cloud.connected) return;
@@ -847,16 +858,24 @@ async function flushCloudChanges({ keepalive = false, immediate = false, throwOn
 
   cloudFlushPromise = (async () => {
     try {
-      lastCloudRevision = await cloud.saveChanges(snapshot, monthKeys, { keepalive });
+      const revision = await cloud.saveChanges(snapshot, monthKeys, { keepalive });
+      cloudFailures = 0;
+      cloudRetryAt = 0;
+      lastCloudRevision = EPOCH;
       state.cloudStatus = 'synced';
       state.cloudError = '';
-      syncChannel?.postMessage({ type: 'cloud-updated', revision: lastCloudRevision, uid: cloud.user?.uid || '' });
+      syncChannel?.postMessage({ type: 'cloud-updated', revision, uid: cloud.user?.uid || '' });
     } catch (error) {
       for (const monthKey of monthKeys) dirtyMonthKeys.add(monthKey);
       if (hadSettingsChange) settingsDirty = true;
       state.cloudStatus = 'error';
       state.cloudError = errorMessage(error);
-      if (!keepalive) showToast(state.cloudError, 'error');
+      cloudFailures += 1;
+      const permanent = ['PERMISSION_DENIED', 'INVALID_ARGUMENT', 'UNAUTHENTICATED'].includes(error?.code);
+      cloudRetryAt = permanent
+        ? Infinity
+        : Date.now() + Math.min(60_000, 1000 * 2 ** Math.min(cloudFailures - 1, 6)) + Math.random() * 500;
+      if (!keepalive && cloudFailures === 1) showToast(state.cloudError, 'error');
       if (throwOnError) throw error;
     } finally {
       cloudFlushPromise = null;
@@ -886,8 +905,10 @@ async function pullRemoteChanges({ silent = true } = {}) {
     syncDisplayNameFromDatabase();
     await saveDatabase(state.database, state.localScope);
     lastCloudRevision = remote.revision;
-    state.cloudStatus = 'synced';
-    state.cloudError = '';
+    if (!dirtyMonthKeys.size && !settingsDirty) {
+      state.cloudStatus = 'synced';
+      state.cloudError = '';
+    }
     renderAfterCloudSync();
     if (!silent) showToast('Changes from another device have been received.', 'success');
   } catch (error) {
@@ -920,6 +941,7 @@ function markUserActive() {
 
 function handleOnline() {
   if (!cloud.authenticated) return;
+  if (Number.isFinite(cloudRetryAt)) cloudRetryAt = 0;
   markUserActive();
   connectAndSync({ silent: true }).then(() => scheduleCloudFlush(0));
   startRemotePolling();

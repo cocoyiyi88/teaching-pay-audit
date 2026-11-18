@@ -285,8 +285,7 @@ function ellipsize(text, maxWidth, size, bold) {
 
 function normalizePdfText(value) {
   return String(value ?? '')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFC')
     .replace(/[\u2013\u2014]/g, '-')
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201c\u201d]/g, '"')

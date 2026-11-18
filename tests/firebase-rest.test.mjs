@@ -274,40 +274,57 @@ test('change password reauthenticates with the current password and refreshes th
   }
 });
 
-test('cloud saves signal SuperApp with only the ID token and survive signal failure', async () => {
+test('cloud writes retry a version conflict and send the session only to Firebase', async () => {
   const previousStorage = globalThis.localStorage;
   const previousFetch = globalThis.fetch;
   globalThis.localStorage = new MemoryStorage();
-  const calls = [];
-  let failSignal = false;
-  globalThis.fetch = async (url, options = {}) => {
-    calls.push({ url: String(url), body: options.body || '', keepalive: options.keepalive });
-    if (String(url).includes('accounts:signInWithPassword')) {
-      return jsonResponse(200, { localId: 'user-123', email: 'o@example.com', idToken: 'id-token', refreshToken: 'refresh-token', expiresIn: '3600' });
+  const writes = [];
+  let reads = 0;
+  const stamp = '2026-08-02T15:00:00.000Z';
+  globalThis.fetch = async (url, options) => {
+    const target = new URL(url);
+    if (target.hostname === 'identitytoolkit.googleapis.com') {
+      return jsonResponse(200, { localId: 'user-123', idToken: 'id-token', refreshToken: 'refresh-token', expiresIn: '3600' });
     }
-    if (String(url).includes('/connector/signal')) {
-      if (failSignal) throw new Error('offline');
-      return jsonResponse(200, { accepted: true });
+    assert.equal(target.hostname, 'firestore.googleapis.com');
+    if (target.pathname.endsWith('documents:commit')) {
+      writes.push(JSON.parse(options.body).writes);
+      return writes.length === 1
+        ? jsonResponse(409, { error: { status: 'ABORTED' } })
+        : jsonResponse(200, { commitTime: stamp });
     }
-    if (String(url).includes('documents:commit') && globalThis.__failCommit) return jsonResponse(500, { error: { message: 'x' } });
-    return jsonResponse(200, { name: 'ok' });
+    reads += 1;
+    return reads === 1 ? jsonResponse(404, {}) : jsonResponse(200, { updateTime: stamp, fields: {} });
   };
   try {
     const client = new FirebaseRestClient({ apiKey: 'k', projectId: 'test-project' });
     await client.signIn('o@example.com', 'secret12');
-    const db = { version: 2, settings: {}, months: {} };
-    await client.saveChanges(db, []);
-    let signals = calls.filter((call) => call.url.includes('/connector/signal'));
-    assert.equal(signals.length, 1);
-    assert.deepEqual(JSON.parse(signals[0].body), { idToken: 'id-token' });
-    failSignal = true;
-    await client.saveChanges(db, []);
-    globalThis.__failCommit = true;
-    const before = calls.filter((call) => call.url.includes('/connector/signal')).length;
-    await assert.rejects(client.saveChanges(db, []));
-    assert.equal(calls.filter((call) => call.url.includes('/connector/signal')).length, before);
+    await client.saveChanges({ version: 2, settings: {}, months: {} }, []);
+    assert.deepEqual(writes[0][0].currentDocument, { exists: false });
+    assert.deepEqual(writes[1][0].currentDocument, { updateTime: stamp });
   } finally {
-    delete globalThis.__failCommit;
+    globalThis.localStorage = previousStorage;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('a refresh that finishes after logout cannot restore a session', async () => {
+  const previousStorage = globalThis.localStorage;
+  const previousFetch = globalThis.fetch;
+  globalThis.localStorage = new MemoryStorage();
+  globalThis.localStorage.setItem('audit-gaji-firebase-user-session-v3', JSON.stringify({
+    uid: 'user-123', email: 'owner@example.com', idToken: 'old', refreshToken: 'refresh', expiresAt: 0,
+  }));
+  let finish;
+  globalThis.fetch = () => new Promise((resolve) => { finish = resolve; });
+  try {
+    const client = new FirebaseRestClient({ apiKey: 'k', projectId: 'test-project' });
+    const refreshing = client.connect();
+    client.signOut();
+    finish(jsonResponse(200, { user_id: 'user-123', id_token: 'new', expires_in: '3600' }));
+    await assert.rejects(refreshing, /session changed/);
+    assert.equal(client.session, null);
+  } finally {
     globalThis.localStorage = previousStorage;
     globalThis.fetch = previousFetch;
   }
