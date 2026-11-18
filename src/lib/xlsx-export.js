@@ -24,7 +24,10 @@ export function buildMonthXlsxBytes(month, displayName = 'Teacher', chartPngByte
   const summary = summarizeMonth(month);
   const detailStart = 4;
   const detailEnd = detailStart + Math.max(entries.length, 1) - 1;
-  const totalRow = detailEnd + 2;
+  const hasOvertime = summary.overtimeEnabled;
+  const subtotalRow = detailEnd + 2;
+  const overtimeRow = detailEnd + 3;
+  const totalRow = hasOvertime ? detailEnd + 4 : detailEnd + 2;
 
   const summaryRows = [
     row(1, [str('A1', BRAND.appName, 1)], 34),
@@ -32,7 +35,13 @@ export function buildMonthXlsxBytes(month, displayName = 'Teacher', chartPngByte
     row(4, [str('A4', 'Teacher', 3), str('B4', displayName, 4), str('D4', 'Reporting Period', 3), str('E4', formatMonthKey(month.monthKey), 4)]),
     row(5, [str('A5', 'Hourly Rate', 3), num('B5', month.hourlyRate, 8), str('D5', 'Teaching Days', 3), num('E5', summary.activeDays, 6)]),
     row(6, [str('A6', 'Total Hours', 3), num('B6', summary.totalHours, 7), str('D6', 'Total Earnings', 3), num('E6', summary.totalPay, 8)]),
-    row(8, [str('A8', 'Use the Daily Details sheet for the full teaching record and editable formulas.', 11)]),
+    ...(hasOvertime ? [
+      row(7, [str('A7', 'Base Pay', 3), num('B7', summary.basePay, 8), str('D7', 'Overtime Bonus', 3), num('E7', summary.overtimeBonus, 8)]),
+      row(8, [str('A8', 'Overtime Rule', 3), str('B8', `Above ${summary.overtimeThresholdHours} hrs @ $${summary.overtimeHourlyRate.toFixed(2)}/hr`, 4), str('D8', 'Overtime Hours', 3), num('E8', summary.overtimeHours, 7)]),
+      row(10, [str('A10', 'Use the Daily Details sheet for the full teaching record and editable formulas.', 11)]),
+    ] : [
+      row(8, [str('A8', 'Use the Daily Details sheet for the full teaching record and editable formulas.', 11)]),
+    ]),
   ];
 
   const detailRows = [row(1, [str('A1', `${BRAND.appName} - ${formatMonthKey(month.monthKey)}`, 1)], 32), row(3, ['No.','Date','Class','Hours','Hourly Rate','Amount','Notes'].map((value, i) => str(`${col(i + 1)}3`, value, 5)), 28)];
@@ -47,7 +56,34 @@ export function buildMonthXlsxBytes(month, displayName = 'Teacher', chartPngByte
   } else {
     detailRows.push(row(detailStart, [str(`A${detailStart}`, 'No teaching activity recorded for this period.', 11)], 28));
   }
-  detailRows.push(row(totalRow, [str(`A${totalRow}`, 'MONTHLY TOTAL', 9), str(`B${totalRow}`, '', 9), str(`C${totalRow}`, '', 9), formula(`D${totalRow}`, `SUM(D${detailStart}:D${detailEnd})`, summary.totalHours, 13), str(`E${totalRow}`, '', 9), formula(`F${totalRow}`, `SUM(F${detailStart}:F${detailEnd})`, summary.totalPay, 10), str(`G${totalRow}`, '', 9)], 28));
+  const detailMerges = entries.length ? ['A1:G1'] : ['A1:G1', `A${detailStart}:G${detailStart}`];
+  if (hasOvertime) {
+    detailRows.push(row(subtotalRow, [
+      str(`A${subtotalRow}`, 'BASE SUBTOTAL', 3), str(`B${subtotalRow}`, '', 4), str(`C${subtotalRow}`, '', 4),
+      formula(`D${subtotalRow}`, `SUM(D${detailStart}:D${detailEnd})`, summary.totalHours, 7),
+      num(`E${subtotalRow}`, month.hourlyRate, 8),
+      formula(`F${subtotalRow}`, `SUM(F${detailStart}:F${detailEnd})`, summary.basePay, 8),
+      str(`G${subtotalRow}`, `${summary.regularHours}h base + ${summary.overtimeHours}h overtime`, 4),
+    ], 24));
+    detailRows.push(row(overtimeRow, [
+      str(`A${overtimeRow}`, `OVERTIME ADJUSTMENT (>${summary.overtimeThresholdHours} hrs)`, 3), str(`B${overtimeRow}`, '', 4), str(`C${overtimeRow}`, '', 4),
+      formula(`D${overtimeRow}`, `MAX(0,D${subtotalRow}-${summary.overtimeThresholdHours})`, summary.overtimeHours, 7),
+      num(`E${overtimeRow}`, summary.overtimeDeltaRate, 8),
+      formula(`F${overtimeRow}`, `ROUND(D${overtimeRow}*E${overtimeRow},2)`, summary.overtimeBonus, 8),
+      str(`G${overtimeRow}`, `Overtime rate $${summary.overtimeHourlyRate.toFixed(2)}/hr`, 4),
+    ], 24));
+    detailRows.push(row(totalRow, [
+      str(`A${totalRow}`, 'MONTHLY TOTAL', 9), str(`B${totalRow}`, '', 9), str(`C${totalRow}`, '', 9),
+      formula(`D${totalRow}`, `D${subtotalRow}`, summary.totalHours, 13),
+      str(`E${totalRow}`, '', 9),
+      formula(`F${totalRow}`, `MAX(0,F${subtotalRow}+F${overtimeRow})`, summary.totalPay, 10),
+      str(`G${totalRow}`, '', 9),
+    ], 28));
+    detailMerges.push(`A${subtotalRow}:C${subtotalRow}`, `A${overtimeRow}:C${overtimeRow}`, `A${totalRow}:C${totalRow}`);
+  } else {
+    detailRows.push(row(totalRow, [str(`A${totalRow}`, 'MONTHLY TOTAL', 9), str(`B${totalRow}`, '', 9), str(`C${totalRow}`, '', 9), formula(`D${totalRow}`, `SUM(D${detailStart}:D${detailEnd})`, summary.totalHours, 13), str(`E${totalRow}`, '', 9), formula(`F${totalRow}`, `SUM(F${detailStart}:F${detailEnd})`, summary.totalPay, 10), str(`G${totalRow}`, '', 9)], 28));
+    detailMerges.push(`A${totalRow}:C${totalRow}`);
+  }
 
   const analytics = monthAnalytics(month);
   const analyticsRows = [
@@ -59,8 +95,8 @@ export function buildMonthXlsxBytes(month, displayName = 'Teacher', chartPngByte
   return buildWorkbook({
     title: `${BRAND.appName} - ${formatMonthKey(month.monthKey)}`,
     sheets: [
-      sheetDef('Summary', summaryRows, { cols: [22, 24, 5, 22, 26, 14], merges: ['A1:F1','A2:F2','A8:F8'] }),
-      sheetDef('Daily Details', detailRows, { cols: [8, 15, 36, 13, 16, 16, 42], merges: entries.length ? ['A1:G1', `A${totalRow}:C${totalRow}`] : ['A1:G1', `A${detailStart}:G${detailStart}`, `A${totalRow}:C${totalRow}`], freezeRows: 3 }),
+      sheetDef('Summary', summaryRows, { cols: [22, 24, 5, 22, 26, 14], merges: ['A1:F1', 'A2:F2', hasOvertime ? 'A10:F10' : 'A8:F8'] }),
+      sheetDef('Daily Details', detailRows, { cols: [8, 15, 36, 13, 16, 16, 42], merges: detailMerges, freezeRows: 3 }),
       sheetDef('Analytics', analyticsRows, { cols: [18, 18, 18, 3, 16, 16, 16, 16, 16, 16, 16, 16, 16], drawing: chartPngBytes ? 1 : 0, freezeRows: 3 }),
     ],
     chartPngBytes,

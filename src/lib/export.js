@@ -39,11 +39,15 @@ function generatedAt() {
 
 export function exportMonthCsv(month, displayName = 'Teacher') {
   const entries = Object.values(month.entries || {}).filter(hasReportContent).sort((a, b) => Number(a.day) - Number(b.day));
+  const summary = summarizeMonth(month);
   const rows = [
     [BRAND_TITLE, 'Monthly Teaching Pay Report'],
     ['Prepared for', displayName],
     ['Reporting period', formatMonthKey(month.monthKey)],
     ['Hourly rate (USD)', month.hourlyRate],
+    ...(summary.overtimeEnabled
+      ? [['Overtime policy', `Above ${summary.overtimeThresholdHours} hrs at ${summary.overtimeHourlyRate} USD/hr`]]
+      : []),
     ['Generated on', generatedAt()],
     [],
     ['No.', 'Date', 'Class', 'Hours', 'Hourly Rate (USD)', 'Amount (USD)', 'Notes'],
@@ -57,8 +61,11 @@ export function exportMonthCsv(month, displayName = 'Teacher') {
       entry.notes,
     ]),
   ];
-  const summary = summarizeMonth(month);
   rows.push([]);
+  if (summary.overtimeHours > 0) {
+    rows.push(['BASE SUBTOTAL', '', '', summary.totalHours, month.hourlyRate, summary.basePay, `${summary.regularHours} regular + ${summary.overtimeHours} overtime hrs`]);
+    rows.push(['OVERTIME ADJUSTMENT', '', '', summary.overtimeHours, summary.overtimeDeltaRate, summary.overtimeBonus, `Above ${summary.overtimeThresholdHours} hrs at ${summary.overtimeHourlyRate} USD/hr`]);
+  }
   rows.push(['MONTHLY TOTAL', '', '', summary.totalHours, '', summary.totalPay, `${summary.activeDays} teaching days`]);
   download(csv(rows), 'text/csv;charset=utf-8', `${BRAND.slug}-monthly-${month.monthKey}.csv`);
 }

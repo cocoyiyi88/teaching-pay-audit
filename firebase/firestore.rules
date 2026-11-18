@@ -13,12 +13,27 @@ service cloud.firestore {
 
     function validSettings(settings) {
       return settings is map
-        && settings.keys().hasOnly(['teacherName', 'profileNameUpdatedAt', 'defaultHourlyRate', 'isPristine', 'updatedAt'])
+        && settings.keys().hasOnly([
+          'teacherName',
+          'profileNameUpdatedAt',
+          'defaultHourlyRate',
+          'overtimeEnabled',
+          'overtimeThresholdHours',
+          'overtimeHourlyRate',
+          'isPristine',
+          'updatedAt'
+        ])
         && settings.get('teacherName', '') is string
         && settings.get('teacherName', '').size() <= 100
         && settings.get('profileNameUpdatedAt', '') is string
         && settings.get('defaultHourlyRate', 10) is number
         && settings.get('defaultHourlyRate', 10) >= 0
+        && settings.get('overtimeEnabled', false) is bool
+        && settings.get('overtimeThresholdHours', 100) is number
+        && settings.get('overtimeThresholdHours', 100) >= 0
+        && settings.get('overtimeThresholdHours', 100) <= 744
+        && settings.get('overtimeHourlyRate', 12) is number
+        && settings.get('overtimeHourlyRate', 12) >= 0
         && settings.get('isPristine', true) is bool
         && settings.get('updatedAt', '') is string;
     }

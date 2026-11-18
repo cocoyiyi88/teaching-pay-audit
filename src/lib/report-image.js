@@ -32,7 +32,8 @@ export async function buildMonthCanvas(month, displayName = 'Teacher') {
     return { entry, classLines, noteLines, height: Math.max(62, 26 + Math.max(classLines.length, noteLines.length) * 25) };
   });
   const rowsHeight = rowLayouts.reduce((sum, item) => sum + item.height, 0) || 88;
-  const height = Math.max(1680, 690 + rowsHeight + 380);
+  const extraRowsHeight = summary.overtimeHours > 0 ? 112 : 0;
+  const height = Math.max(1680, 690 + rowsHeight + extraRowsHeight + 380);
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -48,9 +49,12 @@ export async function buildMonthCanvas(month, displayName = 'Teacher') {
   drawText(ctx, 'Daily Teaching Hours and Earnings', margin, y, { size: 35, weight: 800, color: COLORS.ink }); y += 34;
   drawText(ctx, 'Teaching activity and calculated earnings for the selected reporting period.', margin, y, { size: 17, color: COLORS.muted }); y += 38;
 
+  const rateText = summary.overtimeEnabled
+    ? `${formatCurrency(month.hourlyRate)}/hr (>${formatHours(summary.overtimeThresholdHours)}h: ${formatCurrency(summary.overtimeHourlyRate)})`
+    : `${formatCurrency(month.hourlyRate)} / hour`;
   y = drawMetaCards(ctx, [
     ['Teacher', displayName], ['Reporting Period', formatMonthKey(month.monthKey)],
-    ['Hourly Rate', `${formatCurrency(month.hourlyRate)} / hour`], ['Generated On', formatGeneratedAt(new Date())],
+    ['Hourly Rate', rateText], ['Generated On', formatGeneratedAt(new Date())],
   ], margin, y, usable) + 34;
 
   drawLabel(ctx, 'TEACHING ACTIVITY DETAILS', margin, y); y += 30;
@@ -72,6 +76,30 @@ export async function buildMonthCanvas(month, displayName = 'Teacher') {
       drawTableRow(ctx, values, cols, margin, y, layout.height, index % 2 === 1);
       y += layout.height;
     });
+  }
+  if (summary.overtimeHours > 0) {
+    drawMonthlySummaryRow(ctx, {
+      label: `BASE SUBTOTAL (${formatHours(summary.totalHours)} hrs × ${formatCurrency(month.hourlyRate)})`,
+      hours: formatHours(summary.totalHours),
+      rate: formatCurrency(month.hourlyRate),
+      amount: formatCurrency(summary.basePay),
+      notes: `${formatHours(summary.regularHours)}h base + ${formatHours(summary.overtimeHours)}h OT`,
+      bg: '#f4f6fb',
+      border: COLORS.line,
+      color: COLORS.ink,
+    }, cols, margin, y, 56);
+    y += 56;
+    drawMonthlySummaryRow(ctx, {
+      label: `OVERTIME ADJUSTMENT (${formatHours(summary.overtimeHours)}h > ${formatHours(summary.overtimeThresholdHours)}h × ${formatSignedCurrency(summary.overtimeDeltaRate)})`,
+      hours: `+${formatHours(summary.overtimeHours)}`,
+      rate: formatSignedCurrency(summary.overtimeDeltaRate),
+      amount: formatSignedCurrency(summary.overtimeBonus),
+      notes: `Overtime rate ${formatCurrency(summary.overtimeHourlyRate)}/hr`,
+      bg: '#ecfdf3',
+      border: '#bce3cd',
+      color: COLORS.success,
+    }, cols, margin, y, 56);
+    y += 56;
   }
   drawMonthlyTotalRow(ctx, summary, cols, margin, y, 62); y += 62;
   y += 60;
@@ -150,6 +178,30 @@ function drawTableRow(ctx, values, cols, x, y, h, alternate, { boldCols = [1, 5]
 function drawTotalRow(ctx, values, cols, x, y, h) {
   const width=cols.reduce((a,b)=>a+b,0); ctx.fillStyle=COLORS.ink; ctx.fillRect(x,y,width,h); let cx=x;
   values.forEach((v,i)=>{ drawText(ctx,String(v??''),cx+14,y+37,{size:15,weight:800,color:'#fff',maxWidth:cols[i]-28}); cx+=cols[i]; if(i<cols.length-1) drawVLine(ctx,cx,y,y+h,'#465168'); });
+}
+
+function formatSignedCurrency(value) {
+  const numeric = Number(value) || 0;
+  if (numeric > 0) return `+${formatCurrency(numeric)}`;
+  if (numeric < 0) return `-${formatCurrency(Math.abs(numeric))}`;
+  return formatCurrency(0);
+}
+
+function drawMonthlySummaryRow(ctx, row, cols, x, y, h) {
+  const width = cols.reduce((a, b) => a + b, 0);
+  ctx.fillStyle = row.bg; ctx.fillRect(x, y, width, h);
+  strokeRect(ctx, x, y, width, h, row.border);
+  const mergedWidth = cols[0] + cols[1] + cols[2];
+  drawText(ctx, row.label, x + 16, y + 35, { size: 14, weight: 750, color: row.color, maxWidth: mergedWidth - 32 });
+  let cx = x + mergedWidth;
+  drawVLine(ctx, cx, y, y + h, row.border);
+  drawText(ctx, row.hours, cx + cols[3] - 16, y + 35, { size: 14, weight: 750, color: row.color, align: 'right', maxWidth: cols[3] - 28 });
+  cx += cols[3]; drawVLine(ctx, cx, y, y + h, row.border);
+  drawText(ctx, row.rate, cx + cols[4] - 16, y + 35, { size: 14, weight: 600, color: row.color, align: 'right', maxWidth: cols[4] - 28 });
+  cx += cols[4]; drawVLine(ctx, cx, y, y + h, row.border);
+  drawText(ctx, row.amount, cx + cols[5] - 16, y + 35, { size: 15, weight: 800, color: row.color, align: 'right', maxWidth: cols[5] - 28 });
+  cx += cols[5]; drawVLine(ctx, cx, y, y + h, row.border);
+  drawText(ctx, row.notes, cx + 16, y + 35, { size: 13, weight: 600, color: row.color, maxWidth: cols[6] - 28 });
 }
 
 function drawMonthlyTotalRow(ctx, summary, cols, x, y, h) {

@@ -215,9 +215,38 @@ function renderMonthReport(document, model, brandMark) {
     }
   }
 
+  const hasOvertime = model.summary.overtimeHours > 0;
+  const breakdownHeight = hasOvertime ? 50 : 0;
   const totalHeight = 31;
   const signatureHeight = 104;
-  if (y - totalHeight - signatureHeight < bottomLimit) addPage(true);
+  if (y - breakdownHeight - totalHeight - signatureHeight < bottomLimit) addPage(true);
+  if (hasOvertime) {
+    const s = model.summary;
+    drawMonthlySummaryBand(page, {
+      label: `BASE SUBTOTAL (${formatHours(s.totalHours)} hrs x ${formatCurrency(model.hourlyRate)})`,
+      hours: formatHours(s.totalHours),
+      rate: formatCurrency(model.hourlyRate),
+      amount: formatCurrency(s.basePay),
+      notes: `${formatHours(s.regularHours)}h base + ${formatHours(s.overtimeHours)}h OT`,
+      bg: COLORS.soft,
+      borderColor: COLORS.line,
+      textColor: COLORS.ink,
+      amountColor: COLORS.ink,
+    }, margin, y, 25);
+    y -= 25;
+    drawMonthlySummaryBand(page, {
+      label: `OVERTIME ADJUSTMENT (${formatHours(s.overtimeHours)}h > ${formatHours(s.overtimeThresholdHours)}h x ${formatSignedCurrency(s.overtimeDeltaRate)})`,
+      hours: `+${formatHours(s.overtimeHours)}`,
+      rate: formatSignedCurrency(s.overtimeDeltaRate),
+      amount: formatSignedCurrency(s.overtimeBonus),
+      notes: `Overtime rate ${formatCurrency(s.overtimeHourlyRate)}/hr`,
+      bg: [0.925, 0.988, 0.953],
+      borderColor: [0.73, 0.90, 0.80],
+      textColor: COLORS.success,
+      amountColor: COLORS.success,
+    }, margin, y, 25);
+    y -= 25;
+  }
   drawMonthlyTotal(page, model, margin, y, totalHeight);
   y -= totalHeight;
   drawSignatureSection(page, model.teacherName, margin, y - 29);
@@ -313,10 +342,13 @@ function drawMonthlyIntroduction(page, model, margin, y) {
   page.text('Teaching activity and calculated earnings for the selected reporting period.', margin, y - 38, { size: 8, color: COLORS.muted, maxWidth: page.width - margin * 2 });
 
   const cardsTop = y - 55;
+  const rateText = model.summary.overtimeEnabled
+    ? `${formatCurrency(model.hourlyRate)}/hr (>${formatHours(model.summary.overtimeThresholdHours)}h: ${formatCurrency(model.summary.overtimeHourlyRate)})`
+    : `${formatCurrency(model.hourlyRate)} / hour`;
   drawMetaGrid(page, [
     ['Teacher', model.teacherName],
     ['Reporting Period', model.periodLabel],
-    ['Hourly Rate', `${formatCurrency(model.hourlyRate)} / hour`],
+    ['Hourly Rate', rateText],
     ['Generated On', model.generatedLabel],
   ], margin, cardsTop, page.width - margin * 2);
 
@@ -428,6 +460,33 @@ function drawEmptyTableRow(page, x, topY, width, height, message) {
   page.fillRect(x, bottomY, width, height, COLORS.alternate);
   page.strokeRect(x, bottomY, width, height, { color: COLORS.line, lineWidth: 0.6 });
   page.text(message, x + width / 2, bottomY + height / 2 - 3, { size: 8.5, color: COLORS.muted, align: 'center' });
+}
+
+function formatSignedCurrency(value) {
+  const numeric = Number(value) || 0;
+  if (numeric > 0) return `+${formatCurrency(numeric)}`;
+  if (numeric < 0) return `-${formatCurrency(Math.abs(numeric))}`;
+  return formatCurrency(0);
+}
+
+function drawMonthlySummaryBand(page, band, x, topY, height) {
+  const cells = [
+    { width: MONTHLY_COLUMNS[0].width + MONTHLY_COLUMNS[1].width + MONTHLY_COLUMNS[2].width, value: band.label, align: 'left', bold: true, color: band.textColor },
+    { width: MONTHLY_COLUMNS[3].width, value: band.hours, align: 'right', bold: true, color: band.textColor },
+    { width: MONTHLY_COLUMNS[4].width, value: band.rate, align: 'right', bold: false, color: band.textColor },
+    { width: MONTHLY_COLUMNS[5].width, value: band.amount, align: 'right', bold: true, color: band.amountColor },
+    { width: MONTHLY_COLUMNS[6].width, value: band.notes, align: 'left', bold: false, color: band.textColor },
+  ];
+  const width = cells.reduce((total, cell) => total + cell.width, 0);
+  const bottomY = topY - height;
+  page.fillRect(x, bottomY, width, height, band.bg);
+  page.strokeRect(x, bottomY, width, height, { color: band.borderColor, lineWidth: 0.55 });
+  let cursorX = x;
+  cells.forEach((cell, index) => {
+    if (index) page.line(cursorX, bottomY, cursorX, topY, { color: band.borderColor, lineWidth: 0.45 });
+    drawCellLabel(page, cell.value, cursorX, topY, cell.width, height, { align: cell.align, size: 7.4, bold: cell.bold, color: cell.color, padding: 6 });
+    cursorX += cell.width;
+  });
 }
 
 function drawMonthlyTotal(page, model, x, topY, height) {

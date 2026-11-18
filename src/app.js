@@ -237,6 +237,15 @@ async function handleClick(event) {
     backupInput.click();
   } else if (action === 'clear-month') {
     clearCurrentMonth();
+  } else if (action === 'apply-overtime-month') {
+    const month = currentMonth();
+    month.overtimeEnabled = Boolean(state.database.settings.overtimeEnabled);
+    month.overtimeThresholdHours = state.database.settings.overtimeThresholdHours;
+    month.overtimeHourlyRate = state.database.settings.overtimeHourlyRate;
+    markMonthEdited(month, { overtime: true });
+    markChanged({ monthKey: state.monthKey });
+    render();
+    showToast(`Overtime rule applied to ${formatMonthKey(state.monthKey)}.`, 'success');
   } else if (action === 'sync-now') {
     await syncNow();
   } else if (action === 'sign-out') {
@@ -637,19 +646,56 @@ function handleInput(event) {
     return;
   }
 
+  if (input.dataset.monthOvertime === 'threshold' || input.dataset.monthOvertime === 'rate') {
+    const month = currentMonth();
+    if (input.dataset.monthOvertime === 'threshold') {
+      month.overtimeThresholdHours = Math.min(744, Math.max(0, Math.round((Number(input.value) || 0) * 100) / 100));
+    } else {
+      month.overtimeHourlyRate = Math.max(0, Math.round((Number(input.value) || 0) * 100) / 100);
+    }
+    markMonthEdited(month, { overtime: true });
+    markChanged({ monthKey: state.monthKey });
+    updateMonthlyComputed();
+    return;
+  }
+
   if (input.dataset.setting) {
     const key = input.dataset.setting;
-    state.database.settings[key] = key === 'defaultHourlyRate'
-      ? Math.max(0, Number(input.value) || 0)
-      : input.value.slice(0, 100);
+    if (key === 'overtimeEnabled') return;
+    if (key === 'defaultHourlyRate' || key === 'overtimeHourlyRate') {
+      state.database.settings[key] = Math.max(0, Math.round((Number(input.value) || 0) * 100) / 100);
+    } else if (key === 'overtimeThresholdHours') {
+      state.database.settings[key] = Math.min(744, Math.max(0, Math.round((Number(input.value) || 0) * 100) / 100));
+    } else {
+      state.database.settings[key] = input.value.slice(0, 100);
+    }
     markSettingsEdited(state.database.settings);
     markChanged({ settings: true });
+    setText('#settings-overtime-note', settingsOvertimeSummary(state.database.settings));
   }
 }
 
 function handleChange(event) {
   const input = event.target;
-  if (input instanceof HTMLInputElement && input.dataset.monthPicker && input.value) changeMonth(input.value);
+  if (!(input instanceof HTMLInputElement)) return;
+  if (input.dataset.monthPicker && input.value) {
+    changeMonth(input.value);
+    return;
+  }
+  if (input.dataset.monthOvertime === 'enabled') {
+    const month = currentMonth();
+    month.overtimeEnabled = Boolean(input.checked);
+    markMonthEdited(month, { overtime: true });
+    markChanged({ monthKey: state.monthKey });
+    render();
+    return;
+  }
+  if (input.dataset.setting === 'overtimeEnabled') {
+    state.database.settings.overtimeEnabled = Boolean(input.checked);
+    markSettingsEdited(state.database.settings);
+    markChanged({ settings: true });
+    render();
+  }
 }
 
 function isEditableField(element) {
@@ -751,9 +797,10 @@ function changeMonth(monthKey, { skipRender = false } = {}) {
 function clearCurrentMonth() {
   if (!window.confirm(`Clear all data for ${formatMonthKey(state.monthKey)}? This action cannot be undone without a backup.`)) return;
   const previous = currentMonth();
-  const cleared = createMonth(state.monthKey, previous.hourlyRate);
+  const cleared = createMonth(state.monthKey, previous.hourlyRate, previous);
   cleared.updatedAt = previous.updatedAt;
   cleared.rateUpdatedAt = previous.rateUpdatedAt ?? previous.updatedAt;
+  cleared.overtimeUpdatedAt = previous.overtimeUpdatedAt ?? previous.updatedAt;
   markMonthEdited(cleared);
   state.database.months[state.monthKey] = cleared;
   markChanged({ monthKey: state.monthKey });
@@ -1174,20 +1221,25 @@ function renderMonthly() {
   const month = currentMonth();
   const summary = summarizeMonth(month);
   const invalidCount = Object.values(month.entries).filter((entry) => validateEntry(entry)).length;
+  const hasOvertimeBonus = summary.overtimeHours > 0;
   return `
     <section class="page-title-row">
-      <div><span class="eyebrow">MONTHLY REPORT</span><h2>${formatMonthKey(state.monthKey)}</h2><p>Enter the class name and teaching hours. Pay is calculated automatically using hours × this month's hourly rate.</p></div>
+      <div><span class="eyebrow">MONTHLY REPORT</span><h2>${formatMonthKey(state.monthKey)}</h2><p>Enter the class name and teaching hours. Pay is calculated automatically using hours × this month's hourly rate${month.overtimeEnabled ? ` (overtime above ${formatHours(summary.overtimeThresholdHours)} hrs at ${formatCurrency(summary.overtimeHourlyRate)}/hr)` : ''}.</p></div>
       <div class="month-switcher"><button data-action="previous-month" aria-label="Previous month">${icon('left', 19)}</button><input data-month-picker="true" type="month" value="${state.monthKey}" aria-label="Select month"><button data-action="next-month" aria-label="Next month">${icon('right', 19)}</button></div>
     </section>
     <section class="summary-grid">
       ${summaryCard('calendar', 'Teaching Days', String(summary.activeDays), 'days recorded', 'summary-days')}
-      ${summaryCard('clock', 'Total Hours', `${formatHours(summary.totalHours)} hours`, `Average ${formatHours(summary.averageHours)} hours/day`, 'summary-hours')}
-      ${summaryCard('money', 'Total Pay', formatCurrency(summary.totalPay), `${formatCurrency(month.hourlyRate)} per hour`, 'summary-pay')}
+      ${summaryCard('clock', 'Total Hours', `<span id="summary-hours">${formatHours(summary.totalHours)} hours</span><em id="summary-overtime-pill" class="overtime-pill${hasOvertimeBonus ? '' : ' hidden'}">+${formatHours(summary.overtimeHours)}h OT</em>`, `Average ${formatHours(summary.averageHours)} hours/day`, '', 'summary-hours-helper')}
+      ${summaryCard('money', 'Total Pay', formatCurrency(summary.totalPay), summaryPayHelper(month, summary), 'summary-pay', 'summary-pay-helper')}
     </section>
     <section class="data-card">
       <div class="card-toolbar"><div><h3>Daily Details</h3><p>Data is saved automatically on this device.</p></div><div class="toolbar-actions">
         <span id="audit-status" class="audit-status ${invalidCount ? 'warning' : 'clean'}">${invalidCount ? `${invalidCount} ${invalidCount === 1 ? 'row requires' : 'rows require'} review` : `${icon('check', 14)} Audit clear`}</span>
         <label class="rate-control">This month's rate <span>$</span><input data-month-rate="true" type="number" min="0" step="0.25" value="${month.hourlyRate || ''}" aria-label="Hourly rate for this month"></label>
+        <div class="overtime-control ${month.overtimeEnabled ? 'active' : ''}">
+          <label class="overtime-toggle-inline"><input type="checkbox" data-month-overtime="enabled" ${month.overtimeEnabled ? 'checked' : ''} aria-label="Enable monthly overtime rate"><span>Overtime</span></label>
+          ${month.overtimeEnabled ? `<label class="overtime-mini-field"><span>&gt;</span><input data-month-overtime="threshold" type="number" min="0" max="744" step="1" value="${month.overtimeThresholdHours}" aria-label="Overtime threshold hours"><span>h</span></label><label class="overtime-mini-field"><span>$</span><input data-month-overtime="rate" type="number" min="0" step="0.25" value="${month.overtimeHourlyRate}" aria-label="Overtime hourly rate"></label>` : ''}
+        </div>
         <button class="button secondary compact" data-action="export-csv">${icon('sheet', 17)} CSV</button>
         <button class="button secondary compact" data-action="export-month-xlsx">${icon('excel', 17)} Excel</button>
         <button class="button secondary compact" data-action="export-month-png">${icon('image', 17)} PNG</button>
@@ -1195,7 +1247,23 @@ function renderMonthly() {
       </div></div>
       <div class="table-wrapper"><table class="entry-table"><thead><tr><th class="date-column">Date</th><th>Class</th><th class="hours-column">Hours</th><th class="rate-column">Rate</th><th class="amount-column">Amount</th><th>Notes</th></tr></thead><tbody>
         ${Object.values(month.entries).map(renderEntryRow).join('')}
-      </tbody><tfoot><tr><td colspan="2">TOTAL ${formatMonthKey(state.monthKey).toUpperCase()}</td><td id="footer-hours">${formatHours(summary.totalHours)}</td><td></td><td id="footer-pay">${formatCurrency(summary.totalPay)}</td><td id="footer-days">${summary.activeDays} teaching days</td></tr></tfoot></table></div>
+      </tbody><tfoot>
+        <tr id="footer-subtotal-row" class="subtotal-row${hasOvertimeBonus ? '' : ' hidden'}">
+          <td colspan="2" id="footer-subtotal-label">BASE SUBTOTAL (${formatHours(summary.totalHours)} hrs × ${formatCurrency(month.hourlyRate)})</td>
+          <td id="footer-subtotal-hours">${formatHours(summary.totalHours)}</td>
+          <td id="footer-subtotal-rate">${formatCurrency(month.hourlyRate)}</td>
+          <td id="footer-subtotal-pay">${formatCurrency(summary.basePay)}</td>
+          <td id="footer-subtotal-note">${formatHours(summary.regularHours)}h base + ${formatHours(summary.overtimeHours)}h overtime</td>
+        </tr>
+        <tr id="footer-overtime-row" class="overtime-row${hasOvertimeBonus ? '' : ' hidden'}">
+          <td colspan="2" id="footer-overtime-label">OVERTIME ADJUSTMENT (${formatHours(summary.overtimeHours)}h &gt; ${formatHours(summary.overtimeThresholdHours)}h × ${formatSignedCurrency(summary.overtimeDeltaRate)})</td>
+          <td id="footer-overtime-hours">+${formatHours(summary.overtimeHours)}</td>
+          <td id="footer-overtime-rate">${formatSignedCurrency(summary.overtimeDeltaRate)}</td>
+          <td id="footer-overtime-pay">${formatSignedCurrency(summary.overtimeBonus)}</td>
+          <td id="footer-overtime-note">Overtime rate ${formatCurrency(summary.overtimeHourlyRate)}/hr</td>
+        </tr>
+        <tr class="total-row"><td colspan="2">TOTAL ${formatMonthKey(state.monthKey).toUpperCase()}</td><td id="footer-hours">${formatHours(summary.totalHours)}</td><td></td><td id="footer-pay">${formatCurrency(summary.totalPay)}</td><td id="footer-days">${summary.activeDays} teaching days</td></tr>
+      </tfoot></table></div>
     </section>`;
 }
 
@@ -1253,9 +1321,16 @@ function renderSettings() {
       </section>
 
       <section class="settings-section">
-        <div class="section-heading">${icon('money', 20)}<div><h3>Pay settings</h3><p>The default hourly rate is applied when a new month is created.</p></div></div>
+        <div class="section-heading">${icon('money', 20)}<div><h3>Pay settings</h3><p>The default hourly rate and overtime rule are applied when a new month is created.</p></div></div>
         <label class="field-label">Default hourly rate (USD)<input data-setting="defaultHourlyRate" type="number" min="0" step="0.25" value="${state.database.settings.defaultHourlyRate || ''}"></label>
-        <div class="notice-box subtle">Changing the default rate does not modify previous months. Update the active month's rate directly from the Monthly page.</div>
+        <label class="toggle-row"><input type="checkbox" data-setting="overtimeEnabled" ${state.database.settings.overtimeEnabled ? 'checked' : ''}><span class="toggle-switch" aria-hidden="true"></span><span>Enable monthly overtime rate</span></label>
+        <div class="overtime-settings-grid">
+          <label class="field-label">Overtime threshold (hrs)<input data-setting="overtimeThresholdHours" type="number" min="0" max="744" step="1" value="${state.database.settings.overtimeThresholdHours}" ${state.database.settings.overtimeEnabled ? '' : 'disabled'}></label>
+          <label class="field-label">Overtime rate (USD)<input data-setting="overtimeHourlyRate" type="number" min="0" step="0.25" value="${state.database.settings.overtimeHourlyRate}" ${state.database.settings.overtimeEnabled ? '' : 'disabled'}></label>
+        </div>
+        <div id="settings-overtime-note" class="notice-box ${state.database.settings.overtimeEnabled ? '' : 'subtle'}">${escapeHtml(settingsOvertimeSummary(state.database.settings))}</div>
+        <div class="button-row"><button class="button secondary" type="button" data-action="apply-overtime-month">Apply overtime rule to ${escapeHtml(formatMonthKey(state.monthKey))}</button></div>
+        <div class="notice-box subtle">Changing defaults does not modify previous months automatically. You can also adjust rate &amp; overtime directly on any month.</div>
       </section>
 
       <section class="settings-section">
@@ -1332,20 +1407,68 @@ function logoutProgressRow(iconName, title, detail, status) {
   return `<div class="logout-progress-row ${status}"><div class="logout-progress-icon">${icon(iconName, 18)}</div><div><strong>${title}</strong><span>${detail}</span></div><div class="logout-progress-state">${statusIcon}</div></div>`;
 }
 
-function summaryCard(iconName, label, value, helper, valueId = '') {
-  return `<article class="summary-card"><div class="summary-icon">${icon(iconName, 21)}</div><div><p>${label}</p><strong ${valueId ? `id="${valueId}"` : ''}>${value}</strong><span>${helper}</span></div></article>`;
+function formatSignedCurrency(value) {
+  const numeric = Number(value) || 0;
+  if (numeric > 0) return `+${formatCurrency(numeric)}`;
+  if (numeric < 0) return `-${formatCurrency(Math.abs(numeric))}`;
+  return formatCurrency(0);
+}
+
+function summaryPayHelper(month, summary) {
+  if (summary.overtimeHours > 0) {
+    return `${formatHours(summary.regularHours)}h @ ${formatCurrency(month.hourlyRate)} + ${formatHours(summary.overtimeHours)}h @ ${formatCurrency(summary.overtimeHourlyRate)} (${formatSignedCurrency(summary.overtimeBonus)} OT)`;
+  }
+  if (summary.overtimeEnabled) {
+    return `${formatCurrency(month.hourlyRate)}/hr · OT >${formatHours(summary.overtimeThresholdHours)}h @ ${formatCurrency(summary.overtimeHourlyRate)}`;
+  }
+  return `${formatCurrency(month.hourlyRate)} per hour`;
+}
+
+function settingsOvertimeSummary(settings) {
+  if (!settings.overtimeEnabled) return 'Monthly overtime rate is off. All teaching hours use the base hourly rate.';
+  const delta = Math.round((Number(settings.overtimeHourlyRate) - Number(settings.defaultHourlyRate)) * 100) / 100;
+  return `Hours above ${formatHours(settings.overtimeThresholdHours)} in a month are paid at ${formatCurrency(settings.overtimeHourlyRate)}/hr (${formatSignedCurrency(delta)}/hr adjustment).`;
+}
+
+function summaryCard(iconName, label, value, helper, valueId = '', helperId = '') {
+  return `<article class="summary-card"><div class="summary-icon">${icon(iconName, 21)}</div><div><p>${label}</p><strong ${valueId ? `id="${valueId}"` : ''}>${value}</strong><span ${helperId ? `id="${helperId}"` : ''}>${helper}</span></div></article>`;
 }
 
 function updateMonthlyComputed() {
   if (state.view !== 'monthly') return;
   const month = currentMonth();
   const summary = summarizeMonth(month);
+  const hasOvertimeBonus = summary.overtimeHours > 0;
   setText('#summary-days', summary.activeDays);
   setText('#summary-hours', `${formatHours(summary.totalHours)} hours`);
+  setText('#summary-hours-helper', `Average ${formatHours(summary.averageHours)} hours/day`);
+  const pill = document.querySelector('#summary-overtime-pill');
+  if (pill) {
+    pill.textContent = `+${formatHours(summary.overtimeHours)}h OT`;
+    pill.classList.toggle('hidden', !hasOvertimeBonus);
+  }
   setText('#summary-pay', formatCurrency(summary.totalPay));
+  setText('#summary-pay-helper', summaryPayHelper(month, summary));
   setText('#footer-hours', formatHours(summary.totalHours));
   setText('#footer-pay', formatCurrency(summary.totalPay));
   setText('#footer-days', `${summary.activeDays} teaching days`);
+
+  const subtotalRow = document.querySelector('#footer-subtotal-row');
+  const overtimeRow = document.querySelector('#footer-overtime-row');
+  if (subtotalRow) subtotalRow.classList.toggle('hidden', !hasOvertimeBonus);
+  if (overtimeRow) overtimeRow.classList.toggle('hidden', !hasOvertimeBonus);
+  if (hasOvertimeBonus) {
+    setText('#footer-subtotal-label', `BASE SUBTOTAL (${formatHours(summary.totalHours)} hrs × ${formatCurrency(month.hourlyRate)})`);
+    setText('#footer-subtotal-hours', formatHours(summary.totalHours));
+    setText('#footer-subtotal-rate', formatCurrency(month.hourlyRate));
+    setText('#footer-subtotal-pay', formatCurrency(summary.basePay));
+    setText('#footer-subtotal-note', `${formatHours(summary.regularHours)}h base + ${formatHours(summary.overtimeHours)}h overtime`);
+    setText('#footer-overtime-label', `OVERTIME ADJUSTMENT (${formatHours(summary.overtimeHours)}h > ${formatHours(summary.overtimeThresholdHours)}h × ${formatSignedCurrency(summary.overtimeDeltaRate)})`);
+    setText('#footer-overtime-hours', `+${formatHours(summary.overtimeHours)}`);
+    setText('#footer-overtime-rate', formatSignedCurrency(summary.overtimeDeltaRate));
+    setText('#footer-overtime-pay', formatSignedCurrency(summary.overtimeBonus));
+    setText('#footer-overtime-note', `Overtime rate ${formatCurrency(summary.overtimeHourlyRate)}/hr`);
+  }
 
   let invalidCount = 0;
   for (const entry of Object.values(month.entries)) {

@@ -531,12 +531,27 @@ function isValidEmail(value) {
 }
 
 function encodeMonthForCloud(month) {
-  const { rateUpdatedAt, ...fields } = month;
-  if (rateUpdatedAt === undefined) return fields;
+  const {
+    rateUpdatedAt,
+    overtimeEnabled,
+    overtimeThresholdHours,
+    overtimeHourlyRate,
+    overtimeUpdatedAt,
+    ...fields
+  } = month;
+  const meta = {};
+  if (rateUpdatedAt !== undefined) meta.rateUpdatedAt = rateUpdatedAt;
+  if (overtimeEnabled || overtimeUpdatedAt !== undefined) {
+    meta.overtimeEnabled = Boolean(overtimeEnabled);
+    meta.overtimeThresholdHours = Number(overtimeThresholdHours ?? 100);
+    meta.overtimeHourlyRate = Number(overtimeHourlyRate ?? 12);
+  }
+  if (overtimeUpdatedAt !== undefined) meta.overtimeUpdatedAt = overtimeUpdatedAt;
+  if (!Object.keys(meta).length) return fields;
   // The existing Firestore rules permit extra metadata inside the entries map.
   fields.entries = {
     ...fields.entries,
-    1: { ...fields.entries[1], rateUpdatedAt },
+    1: { ...fields.entries[1], ...meta },
   };
   return fields;
 }

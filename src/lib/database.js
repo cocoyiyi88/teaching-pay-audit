@@ -1,5 +1,5 @@
 import { getDaysInMonth } from './date.js';
-import { normalizeHours } from './calculations.js';
+import { normalizeHours, normalizeOvertimeConfig } from './calculations.js';
 
 const EPOCH = '1970-01-01T00:00:00.000Z';
 
@@ -11,12 +11,16 @@ export function createEntry(day) {
   return { day, className: '', hours: 0, notes: '' };
 }
 
-export function createMonth(monthKey, hourlyRate = 10) {
+export function createMonth(monthKey, hourlyRate = 10, overtime = {}) {
   const entries = {};
+  const normalizedOvertime = normalizeOvertimeConfig(overtime);
   for (let day = 1; day <= getDaysInMonth(monthKey); day += 1) entries[day] = createEntry(day);
   return {
     monthKey,
     hourlyRate: Math.max(0, Number(hourlyRate) || 0),
+    overtimeEnabled: normalizedOvertime.enabled,
+    overtimeThresholdHours: normalizedOvertime.thresholdHours,
+    overtimeHourlyRate: normalizedOvertime.overtimeRate,
     entries,
     isPristine: true,
     updatedAt: EPOCH,
@@ -30,6 +34,9 @@ export function createDatabase() {
       teacherName: '',
       profileNameUpdatedAt: EPOCH,
       defaultHourlyRate: 10,
+      overtimeEnabled: false,
+      overtimeThresholdHours: 100,
+      overtimeHourlyRate: 12,
       isPristine: true,
       updatedAt: EPOCH,
     },
@@ -43,7 +50,7 @@ export function ensureMonth(database, monthKey) {
     ...database,
     months: {
       ...database.months,
-      [monthKey]: createMonth(monthKey, database.settings.defaultHourlyRate),
+      [monthKey]: createMonth(monthKey, database.settings.defaultHourlyRate, database.settings),
     },
   };
 }
@@ -57,15 +64,23 @@ export function sanitizeDatabase(candidate) {
   const teacherName = typeof rawSettings.teacherName === 'string' ? rawSettings.teacherName.slice(0, 100) : '';
   const profileNameUpdatedAt = validTimestamp(rawSettings.profileNameUpdatedAt, EPOCH);
   const safeDefaultRate = Number.isFinite(defaultRate) ? Math.max(0, defaultRate) : 10;
+  const settingsOvertime = normalizeOvertimeConfig(rawSettings);
   const database = {
     version: 2,
     settings: {
       teacherName,
       profileNameUpdatedAt,
       defaultHourlyRate: safeDefaultRate,
+      overtimeEnabled: settingsOvertime.enabled,
+      overtimeThresholdHours: settingsOvertime.thresholdHours,
+      overtimeHourlyRate: settingsOvertime.overtimeRate,
       isPristine: typeof rawSettings.isPristine === 'boolean'
         ? rawSettings.isPristine
-        : teacherName === '' && safeDefaultRate === 10,
+        : teacherName === ''
+          && safeDefaultRate === 10
+          && !settingsOvertime.enabled
+          && settingsOvertime.thresholdHours === 100
+          && settingsOvertime.overtimeRate === 12,
       updatedAt: validTimestamp(rawSettings.updatedAt, EPOCH),
     },
     months: {},
@@ -76,11 +91,25 @@ export function sanitizeDatabase(candidate) {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey) || !rawMonth || typeof rawMonth !== 'object') continue;
     const rate = Number(rawMonth.hourlyRate);
     const safeRate = Number.isFinite(rate) ? Math.max(0, rate) : database.settings.defaultHourlyRate;
-    const month = createMonth(monthKey, safeRate);
+    const dayOneMeta = rawMonth.entries?.[1];
+    const monthOvertime = normalizeOvertimeConfig({
+      overtimeEnabled: rawMonth.overtimeEnabled ?? dayOneMeta?.overtimeEnabled ?? false,
+      overtimeThresholdHours: rawMonth.overtimeThresholdHours ?? dayOneMeta?.overtimeThresholdHours ?? database.settings.overtimeThresholdHours,
+      overtimeHourlyRate: rawMonth.overtimeHourlyRate ?? dayOneMeta?.overtimeHourlyRate ?? database.settings.overtimeHourlyRate,
+    });
+    const month = createMonth(monthKey, safeRate, {
+      overtimeEnabled: monthOvertime.enabled,
+      overtimeThresholdHours: monthOvertime.thresholdHours,
+      overtimeHourlyRate: monthOvertime.overtimeRate,
+    });
     month.updatedAt = validTimestamp(rawMonth.updatedAt, EPOCH);
-    const rateUpdatedAt = rawMonth.rateUpdatedAt ?? rawMonth.entries?.[1]?.rateUpdatedAt;
+    const rateUpdatedAt = rawMonth.rateUpdatedAt ?? dayOneMeta?.rateUpdatedAt;
     if (typeof rateUpdatedAt === 'string') {
       month.rateUpdatedAt = validTimestamp(rateUpdatedAt, EPOCH);
+    }
+    const overtimeUpdatedAt = rawMonth.overtimeUpdatedAt ?? dayOneMeta?.overtimeUpdatedAt;
+    if (typeof overtimeUpdatedAt === 'string') {
+      month.overtimeUpdatedAt = validTimestamp(overtimeUpdatedAt, EPOCH);
     }
     const rawEntries = rawMonth.entries && typeof rawMonth.entries === 'object' ? rawMonth.entries : {};
     for (let day = 1; day <= getDaysInMonth(monthKey); day += 1) {
@@ -96,7 +125,11 @@ export function sanitizeDatabase(candidate) {
     }
     month.isPristine = typeof rawMonth.isPristine === 'boolean'
       ? rawMonth.isPristine
-      : !monthHasContent(month) && month.hourlyRate === database.settings.defaultHourlyRate;
+      : !monthHasContent(month)
+        && month.hourlyRate === database.settings.defaultHourlyRate
+        && month.overtimeEnabled === database.settings.overtimeEnabled
+        && month.overtimeThresholdHours === database.settings.overtimeThresholdHours
+        && month.overtimeHourlyRate === database.settings.overtimeHourlyRate;
     database.months[monthKey] = month;
   }
   return database;
@@ -125,6 +158,9 @@ function mergeMonths(left, right) {
   const leftRateTime = left.rateUpdatedAt ?? left.updatedAt;
   const rightRateTime = right.rateUpdatedAt ?? right.updatedAt;
   const rateWinner = compareTime(rightRateTime, leftRateTime) > 0 ? right : left;
+  const leftOvertimeTime = left.overtimeUpdatedAt ?? left.updatedAt;
+  const rightOvertimeTime = right.overtimeUpdatedAt ?? right.updatedAt;
+  const overtimeWinner = compareTime(rightOvertimeTime, leftOvertimeTime) > 0 ? right : left;
   const entries = {};
   for (const [day, entry] of Object.entries(left.entries)) {
     const incoming = right.entries[day];
@@ -139,17 +175,22 @@ function mergeMonths(left, right) {
     entries,
     hourlyRate: rateWinner.hourlyRate,
     rateUpdatedAt: rateWinner.rateUpdatedAt ?? rateWinner.updatedAt,
+    overtimeEnabled: overtimeWinner.overtimeEnabled,
+    overtimeThresholdHours: overtimeWinner.overtimeThresholdHours,
+    overtimeHourlyRate: overtimeWinner.overtimeHourlyRate,
+    overtimeUpdatedAt: overtimeWinner.overtimeUpdatedAt ?? overtimeWinner.updatedAt,
   };
 }
 
-export function markMonthEdited(month, { day, rate = false } = {}) {
+export function markMonthEdited(month, { day, rate = false, overtime = false } = {}) {
   const previous = month.updatedAt;
   const next = new Date(Math.max(Date.now(), Date.parse(previous) + 1)).toISOString();
   for (const entry of Object.values(month.entries)) {
-    if (entry.day === day || (!day && !rate)) entry.updatedAt = next;
+    if (entry.day === day || (!day && !rate && !overtime)) entry.updatedAt = next;
     else entry.updatedAt ??= previous;
   }
   month.rateUpdatedAt = rate ? next : month.rateUpdatedAt ?? previous;
+  month.overtimeUpdatedAt = overtime ? next : month.overtimeUpdatedAt ?? previous;
   month.isPristine = false;
   month.updatedAt = next;
   return month;
