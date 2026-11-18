@@ -284,20 +284,22 @@ export class FirebaseRestClient {
     clearTimeout(this.#signalTimer);
     if (key) {
       localStorage.setItem(SUPERAPP_KEY_PREFIX + uid, key);
-      this.#notifySuperApp(uid);
-    } else {
-      localStorage.removeItem(SUPERAPP_KEY_PREFIX + uid);
+      return this.#notifySuperApp(uid);
     }
+    localStorage.removeItem(SUPERAPP_KEY_PREFIX + uid);
+    return null;
   }
 
   #notifySuperApp(uid, keepalive = false, attempt = 0) {
     clearTimeout(this.#signalTimer);
-    if (this.session?.uid !== uid) return;
+    if (this.session?.uid !== uid) return Promise.resolve({ ok: false, status: 0 });
     const signalKey = this.#readSuperAppKey(uid);
-    if (!signalKey) return;
-    void (async () => {
+    if (!signalKey) return Promise.resolve({ ok: false, status: 0 });
+    return (async () => {
       let retry = false;
       let delay = 10_000;
+      let status = 0;
+      let ok = false;
       try {
         const response = await fetch(SUPERAPP_SIGNAL_URL, {
           method: 'POST',
@@ -309,14 +311,17 @@ export class FirebaseRestClient {
           referrerPolicy: 'no-referrer',
           signal: AbortSignal.timeout(15_000),
         });
+        status = response.status;
+        ok = response.ok;
         retry = response.status === 429 || response.status >= 500;
         if (response.status === 429) delay = 15_000;
       } catch { retry = true; }
       if (retry && !keepalive && attempt < 2 && this.session?.uid === uid
         && this.#readSuperAppKey(uid) === signalKey) {
         clearTimeout(this.#signalTimer);
-        this.#signalTimer = setTimeout(() => this.#notifySuperApp(uid, false, attempt + 1), delay);
+        this.#signalTimer = setTimeout(() => { void this.#notifySuperApp(uid, false, attempt + 1); }, delay);
       }
+      return { ok, status };
     })();
   }
 

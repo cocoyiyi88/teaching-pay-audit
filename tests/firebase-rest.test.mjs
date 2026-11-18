@@ -449,3 +449,38 @@ test('SuperApp signals carry only the account-scoped sync key after a cloud writ
     globalThis.fetch = previousFetch;
   }
 });
+
+test('setSuperAppKey reports actual SuperApp signal delivery status without rejecting', async () => {
+  const previousStorage = globalThis.localStorage;
+  const previousFetch = globalThis.fetch;
+  globalThis.localStorage = new MemoryStorage();
+  const key = 'ms1_' + 'b'.repeat(43);
+  let mode = 'ok';
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('accounts:signInWithPassword')) {
+      return jsonResponse(200, { localId: 'paired-uid', idToken: 'firebase-id',
+        refreshToken: 'firebase-refresh', expiresIn: '3600' });
+    }
+    if (mode === '403') return jsonResponse(403, { error: 'Kunci sinkron tidak valid.' });
+    if (mode === 'csp-block') throw new TypeError('Failed to fetch');
+    return jsonResponse(200, { accepted: true });
+  };
+  try {
+    const client = new FirebaseRestClient({ apiKey: 'key', projectId: 'test-project' });
+    await client.signIn('owner@example.com', 'example-password');
+
+    mode = 'ok';
+    assert.deepEqual(await client.setSuperAppKey(key), { ok: true, status: 200 });
+
+    mode = '403';
+    assert.deepEqual(await client.setSuperAppKey(key), { ok: false, status: 403 });
+
+    mode = 'csp-block';
+    assert.deepEqual(await client.setSuperAppKey(key), { ok: false, status: 0 });
+
+    assert.equal(client.setSuperAppKey(''), null);
+  } finally {
+    globalThis.localStorage = previousStorage;
+    globalThis.fetch = previousFetch;
+  }
+});

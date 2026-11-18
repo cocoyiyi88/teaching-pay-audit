@@ -42,9 +42,17 @@ for (const file of files) {
   const content = await readFile(file);
   hash.update(String(content.length)).update(':').update(content);
 }
+try {
+  const vercelConfig = await readFile(resolve(root, 'vercel.json'));
+  hash.update('vercel.json:').update(String(vercelConfig.length)).update(':').update(vercelConfig);
+} catch {
+  // Optional outside Vercel deployments.
+}
+const buildId = hash.digest('hex').slice(0, 16);
+await writeFile(htmlPath, html.replaceAll('__BUILD_CACHE_ID__', buildId), 'utf8');
 const worker = resolve(output, 'sw.js');
 const workerSource = await readFile(worker, 'utf8');
-await writeFile(worker, workerSource.replace('__BUILD_CACHE_ID__', hash.digest('hex').slice(0, 16)), 'utf8');
+await writeFile(worker, workerSource.replaceAll('__BUILD_CACHE_ID__', buildId), 'utf8');
 
 function escapeHtml(value) {
   return String(value)

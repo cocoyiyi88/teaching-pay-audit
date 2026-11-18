@@ -278,9 +278,19 @@ async function handleSubmit(event) {
     const input = form.elements.namedItem('signalKey');
     try {
       if (!remove && !input.value.trim()) throw new Error('Paste your SuperApp sync key.');
-      cloud.setSuperAppKey(remove ? '' : input.value);
+      const signalRequest = cloud.setSuperAppKey(remove ? '' : input.value);
       render();
-      showToast(remove ? 'SuperApp key removed from this browser.' : 'SuperApp key saved. Refresh requested.', 'success');
+      if (remove) {
+        showToast('SuperApp key removed from this browser.', 'success');
+      } else {
+        showToast('SuperApp key saved. Requesting refresh...', 'success');
+        const result = await signalRequest;
+        if (result?.ok) showToast('SuperApp key saved and dashboard refresh requested.', 'success');
+        else if (result?.status === 429) showToast('SuperApp key saved. Refresh will retry automatically in a few seconds.', 'success');
+        else if (result?.status === 403) showToast('Key saved, but SuperApp rejected the key or origin. Verify the key in SuperApp.', 'error');
+        else if (result?.status >= 500) showToast('Key saved, but SuperApp could not reach MySalary. Reconnect MySalary in SuperApp if needed.', 'error');
+        else showToast('Key saved, but the browser blocked the SuperApp signal. Hard-reload (Ctrl+Shift+R) and try again.', 'error');
+      }
     } catch (error) { showToast(errorMessage(error), 'error'); }
     return;
   }
