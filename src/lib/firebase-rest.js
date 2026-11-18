@@ -4,6 +4,9 @@ const SESSION_KEY = 'audit-gaji-firebase-user-session-v3';
 const LEGACY_SESSION_KEY = 'audit-gaji-firebase-anonymous-session-v2';
 const MAX_MONTHS = 600;
 const MAX_MONTH_WRITES_PER_COMMIT = 40;
+const SUPERAPP_SIGNAL_URL = 'https://zen.charisna-superapp.workers.dev/connector/signal';
+const SUPERAPP_KEY_PREFIX = 'mysalary-superapp-key:';
+const SUPERAPP_KEY = /^ms1_[A-Za-z0-9_-]{43}$/;
 const EPOCH = '1970-01-01T00:00:00.000Z';
 const FATAL_REFRESH_ERRORS = new Set([
   'INVALID_REFRESH_TOKEN',
@@ -16,6 +19,7 @@ const FATAL_REFRESH_ERRORS = new Set([
 export class FirebaseRestClient {
   #refreshPromise = null;
   #sessionGeneration = 0;
+  #signalTimer;
 
   constructor(config) {
     this.apiKey = String(config?.apiKey || '').trim();
@@ -150,6 +154,7 @@ export class FirebaseRestClient {
   }
 
   signOut() {
+    clearTimeout(this.#signalTimer);
     this.#sessionGeneration += 1;
     this.#refreshPromise = null;
     try {
@@ -250,12 +255,69 @@ export class FirebaseRestClient {
         }
       }
     }
+    this.#notifySuperApp(session.uid, options.keepalive);
     return revision;
   }
 
   async syncAll(database, options = {}) {
     const monthKeys = Object.keys(database?.months || {}).filter(isMonthKey);
     return this.saveChanges(database, monthKeys, options);
+  }
+
+  #readSuperAppKey(uid) {
+    if (!uid) return '';
+    try {
+      const key = localStorage.getItem(SUPERAPP_KEY_PREFIX + uid);
+      return SUPERAPP_KEY.test(key || '') ? key : '';
+    } catch { return ''; }
+  }
+
+  get hasSuperAppKey() {
+    return Boolean(this.#readSuperAppKey(this.session?.uid));
+  }
+
+  setSuperAppKey(value) {
+    const uid = this.session?.uid;
+    if (!uid) throw new Error('Sign in to manage the SuperApp connection.');
+    const key = String(value || '').trim();
+    if (key && !SUPERAPP_KEY.test(key)) throw new Error('Paste a valid sync key from CHARISNA SuperApp.');
+    clearTimeout(this.#signalTimer);
+    if (key) {
+      localStorage.setItem(SUPERAPP_KEY_PREFIX + uid, key);
+      this.#notifySuperApp(uid);
+    } else {
+      localStorage.removeItem(SUPERAPP_KEY_PREFIX + uid);
+    }
+  }
+
+  #notifySuperApp(uid, keepalive = false, attempt = 0) {
+    clearTimeout(this.#signalTimer);
+    if (this.session?.uid !== uid) return;
+    const signalKey = this.#readSuperAppKey(uid);
+    if (!signalKey) return;
+    void (async () => {
+      let retry = false;
+      let delay = 10_000;
+      try {
+        const response = await fetch(SUPERAPP_SIGNAL_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ signalKey }),
+          keepalive: Boolean(keepalive),
+          credentials: 'omit',
+          redirect: 'error',
+          referrerPolicy: 'no-referrer',
+          signal: AbortSignal.timeout(15_000),
+        });
+        retry = response.status === 429 || response.status >= 500;
+        if (response.status === 429) delay = 15_000;
+      } catch { retry = true; }
+      if (retry && !keepalive && attempt < 2 && this.session?.uid === uid
+        && this.#readSuperAppKey(uid) === signalKey) {
+        clearTimeout(this.#signalTimer);
+        this.#signalTimer = setTimeout(() => this.#notifySuperApp(uid, false, attempt + 1), delay);
+      }
+    })();
   }
 
   #assertConfigured() {

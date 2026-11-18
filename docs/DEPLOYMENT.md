@@ -39,5 +39,8 @@ Emulator before publishing those rules separately. Older clients write whole-mon
 snapshots, so have users close existing tabs and reopen the app after rollout to
 limit mixed-version editing.
 
-Browser writes no longer send Firebase ID tokens to the SuperApp. Verify that the
-SuperApp scheduler imports a saved change before relying on refreshed dashboard data.
+Deploy the SuperApp endpoint first. The owner creates a MySalary sync key on the
+SuperApp dashboard and enters it in MySalary Settings on each browser used for
+immediate sync. After a successful cloud commit, the browser only sends that
+scoped key. The Worker has permission to refresh the connected dashboard only.
+Verify the dashboard timestamp after a save. The existing Cron remains a fallback.

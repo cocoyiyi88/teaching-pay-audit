@@ -408,3 +408,44 @@ test('restoreSession keeps session when offline or refresh hits transient networ
     globalThis.fetch = previousFetch;
   }
 });
+
+test('SuperApp signals carry only the account-scoped sync key after a cloud write', async () => {
+  const previousStorage = globalThis.localStorage;
+  const previousFetch = globalThis.fetch;
+  globalThis.localStorage = new MemoryStorage();
+  const key = 'ms1_' + 'a'.repeat(43);
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).includes('accounts:signInWithPassword')) {
+      return jsonResponse(200, { localId: 'paired-uid', idToken: 'firebase-id',
+        refreshToken: 'firebase-refresh', expiresIn: '3600' });
+    }
+    if (String(url).endsWith('/documents:commit') || String(url).endsWith('/connector/signal')) {
+      return jsonResponse(200, {});
+    }
+    return jsonResponse(404, {});
+  };
+  try {
+    const client = new FirebaseRestClient({ apiKey: 'key', projectId: 'test-project' });
+    await client.signIn('owner@example.com', 'example-password');
+    assert.throws(() => client.setSuperAppKey('invalid'), /valid sync key/);
+    client.setSuperAppKey(key);
+    assert.equal(client.hasSuperAppKey, true);
+    calls.length = 0;
+    await client.saveChanges({ months: {} });
+    const commit = calls.findIndex(call => call.url.endsWith('/documents:commit'));
+    const signal = calls.findIndex(call => call.url.endsWith('/connector/signal'));
+    assert.ok(commit >= 0 && signal > commit);
+    assert.deepEqual(JSON.parse(calls[signal].options.body), { signalKey: key });
+    assert.equal(calls[signal].options.credentials, 'omit');
+    client.setSuperAppKey('');
+    assert.equal(client.hasSuperAppKey, false);
+    calls.length = 0;
+    await client.saveChanges({ months: {} });
+    assert.ok(calls.every(call => !call.url.endsWith('/connector/signal')));
+  } finally {
+    globalThis.localStorage = previousStorage;
+    globalThis.fetch = previousFetch;
+  }
+});

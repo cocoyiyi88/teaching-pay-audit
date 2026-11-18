@@ -272,6 +272,19 @@ async function handleSubmit(event) {
     return;
   }
 
+  if (form.dataset.superappForm === 'true') {
+    event.preventDefault();
+    const remove = event.submitter?.value === 'remove';
+    const input = form.elements.namedItem('signalKey');
+    try {
+      if (!remove && !input.value.trim()) throw new Error('Paste your SuperApp sync key.');
+      cloud.setSuperAppKey(remove ? '' : input.value);
+      render();
+      showToast(remove ? 'SuperApp key removed from this browser.' : 'SuperApp key saved. Refresh requested.', 'success');
+    } catch (error) { showToast(errorMessage(error), 'error'); }
+    return;
+  }
+
   if (!form.dataset.authForm) return;
   event.preventDefault();
 
@@ -1241,6 +1254,15 @@ function renderSettings() {
       </section>
 
       ${renderCloudSettings()}
+
+      <section class="settings-section">
+        <div class="section-heading">${icon('refresh', 20)}<div><h3>CHARISNA SuperApp</h3><p>Paste a sync key generated in your SuperApp dashboard.</p></div></div>
+        <form class="profile-form" data-superapp-form="true">
+          <label class="field-label">Sync key<input name="signalKey" type="password" maxlength="47" autocomplete="off" spellcheck="false"></label>
+          <div class="button-row"><button class="button secondary" type="submit">Save sync key</button>${cloud.hasSuperAppKey ? '<button class="button secondary" type="submit" value="remove">Remove from this browser</button>' : ''}</div>
+          ${cloud.hasSuperAppKey ? '<p class="field-help">A key is saved for this account on this browser.</p>' : ''}
+        </form>
+      </section>
 
       <section class="settings-section about-settings-section">
         <div class="section-heading">${icon('signature', 20)}<div><h3>About</h3><p>Production workspace information.</p></div></div>
