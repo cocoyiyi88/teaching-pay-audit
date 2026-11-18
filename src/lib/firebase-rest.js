@@ -235,7 +235,7 @@ export class FirebaseRestClient {
         const index = [...new Set([...priorKeys, ...monthKeys])].sort().slice(-MAX_MONTHS);
         revision = new Date(Math.max(Date.now(), Date.parse(validRevision(remoteMetadata.updatedAt)) + 1)).toISOString();
         const writes = monthKeys.map((key, position) => versionedWrite(
-          this.#documentName(root + '/salaryAuditMonths/' + key), merged.months[key], remoteMonths[position],
+          this.#documentName(root + '/salaryAuditMonths/' + key), encodeMonthForCloud(merged.months[key]), remoteMonths[position],
         ));
         writes.push(versionedWrite(this.#documentName(metadataPath), {
           settings: merged.settings, monthKeys: index, updatedAt: revision,
@@ -461,6 +461,17 @@ function normalizeEmail(value) {
 
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function encodeMonthForCloud(month) {
+  const { rateUpdatedAt, ...fields } = month;
+  if (rateUpdatedAt === undefined) return fields;
+  // The existing Firestore rules permit extra metadata inside the entries map.
+  fields.entries = {
+    ...fields.entries,
+    1: { ...fields.entries[1], rateUpdatedAt },
+  };
+  return fields;
 }
 
 function versionedWrite(name, fields, previous) {

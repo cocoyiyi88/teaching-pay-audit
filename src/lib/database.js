@@ -78,8 +78,9 @@ export function sanitizeDatabase(candidate) {
     const safeRate = Number.isFinite(rate) ? Math.max(0, rate) : database.settings.defaultHourlyRate;
     const month = createMonth(monthKey, safeRate);
     month.updatedAt = validTimestamp(rawMonth.updatedAt, EPOCH);
-    if (typeof rawMonth.rateUpdatedAt === 'string') {
-      month.rateUpdatedAt = validTimestamp(rawMonth.rateUpdatedAt, EPOCH);
+    const rateUpdatedAt = rawMonth.rateUpdatedAt ?? rawMonth.entries?.[1]?.rateUpdatedAt;
+    if (typeof rateUpdatedAt === 'string') {
+      month.rateUpdatedAt = validTimestamp(rateUpdatedAt, EPOCH);
     }
     const rawEntries = rawMonth.entries && typeof rawMonth.entries === 'object' ? rawMonth.entries : {};
     for (let day = 1; day <= getDaysInMonth(monthKey); day += 1) {

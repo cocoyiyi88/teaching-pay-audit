@@ -91,12 +91,18 @@ test('month changes and metadata are committed atomically to the account documen
     database.months['2026-08'].isPristine = false;
     database.months['2026-08'].updatedAt = '2026-08-02T15:00:00.000Z';
 
+    database.months['2026-08'].rateUpdatedAt = '2026-08-02T15:00:00.000Z';
+
     const revision = await client.saveChanges(database, ['2026-08'], { keepalive: true });
     const commitCall = calls.find((call) => call.url.endsWith('/documents:commit'));
     assert.ok(commitCall);
     assert.equal(commitCall.options.keepalive, true);
     const body = JSON.parse(commitCall.options.body);
     assert.equal(body.writes.length, 2);
+    const fields = body.writes[0].update.fields;
+    assert.equal(fields.rateUpdatedAt, undefined);
+    assert.equal(fields.entries.mapValue.fields['1'].mapValue.fields.rateUpdatedAt.stringValue,
+      database.months['2026-08'].rateUpdatedAt);
     assert.match(body.writes[0].update.name, /users\/user-456\/salaryAuditMonths\/2026-08$/);
     assert.match(body.writes[1].update.name, /users\/user-456\/salaryAudit\/database$/);
     assert.equal(typeof revision, 'string');
